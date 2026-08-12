@@ -58,10 +58,11 @@ Microphone::Microphone()
 void Microphone::init() {
   log_i("Microphone: Initializing...");
   
-  // Create queue for audio samples
-  samples_queue = xQueueCreate(8, sizeof(AudioSample));
-  ::samples_queue = samples_queue;  // Store in global for backward compatibility
-  
+  // Create a length-1 "mailbox" queue: getLevel() only ever wants the most
+  // recent block, so the reader task uses xQueueOverwrite() to keep the
+  // latest sample without ever blocking (see i2sReaderTask()).
+  samples_queue = xQueueCreate(1, sizeof(AudioSample));
+
   if (samples_queue == nullptr) {
     log_e("ERROR: Queue creation failed!");
     return;
@@ -238,7 +239,7 @@ void Microphone::i2sReaderTask() {
     q.sum_sqr_weighted = aweight_.filter(samples, samples, SAMPLES_SHORT);
     q.proc_ticks = 0;
 
-    xQueueSend(samples_queue, &q, portMAX_DELAY);
+    xQueueOverwrite(samples_queue, &q);
     
     if (++sample_count % 400 == 0) {
       log_d("I2S: %u blocks read", sample_count);
