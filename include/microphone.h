@@ -4,6 +4,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include "config.h"
+#include "sos-iir-filter.h"
 
 //
 // Microphone Data Structure
@@ -37,10 +38,12 @@ private:
   TaskHandle_t reader_task_handle;
   double current_level;
   double smoothed_level;
-  
-  // Filter state arrays (members now)
-  float inmp441_state[1][2];   // 1 section, 2 state vars
-  float aweight_state[4][2];   // 4 sections, 2 state vars each
+
+  // IIR filters applied to each block before computing the dBA level:
+  // equalizer flattens the INMP441's frequency response, then A-weighting
+  // approximates human loudness perception. Each owns its own filter state.
+  SOS_IIR_Filter_Cpp equalizer_;
+  SOS_IIR_Filter_Cpp aweight_;
 };
 
 // Global instance

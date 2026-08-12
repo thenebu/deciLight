@@ -19,14 +19,9 @@ float samples[SAMPLES_SHORT] __attribute__((aligned(4)));
 static int32_t raw_samples[SAMPLES_SHORT] __attribute__((aligned(4)));
 
 //
-// SOS IIR FILTER STRUCTURE
+// SOS IIR FILTER COEFFICIENTS
+// (SOS_IIR_Filter struct is defined in sos-iir-filter.h, included via microphone.h)
 //
-struct SOS_IIR_Filter {
-  float gain;
-  struct {
-    float b1, b2, a1, a2;
-  } sos[6];
-};
 
 // INMP441 Equalizer Filter
 const SOS_IIR_Filter INMP441_filter = {
@@ -50,19 +45,11 @@ const SOS_IIR_Filter A_weighting_filter = {
 //============================================
 Microphone::Microphone()
   : reader_task_handle(nullptr),
-    samples_queue(nullptr),
     current_level(30.0),
-    smoothed_level(30.0)
+    smoothed_level(30.0),
+    equalizer_(&INMP441_filter, 1),
+    aweight_(&A_weighting_filter, 4)
 {
-  // Filter state arrays as members
-  for (int i = 0; i < 1; i++) {
-    inmp441_state[i][0] = 0;
-    inmp441_state[i][1] = 0;
-  }
-  for (int i = 0; i < 4; i++) {
-    aweight_state[i][0] = 0;
-    aweight_state[i][1] = 0;
-  }
 }
 
 //============================================
@@ -244,8 +231,11 @@ void Microphone::i2sReaderTask() {
     for (int i = 0; i < SAMPLES_SHORT; i++) {
       q.sum_sqr_SPL += samples[i] * samples[i];
     }
-    
-    q.sum_sqr_weighted = q.sum_sqr_SPL;
+
+    // Equalize for the INMP441's frequency response, then apply A-weighting
+    // to approximate human loudness perception before computing the level.
+    equalizer_.filter(samples, samples, SAMPLES_SHORT);
+    q.sum_sqr_weighted = aweight_.filter(samples, samples, SAMPLES_SHORT);
     q.proc_ticks = 0;
 
     xQueueSend(samples_queue, &q, portMAX_DELAY);

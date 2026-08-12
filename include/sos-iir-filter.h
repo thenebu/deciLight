@@ -31,51 +31,6 @@ struct SOS_IIR_Filter {
 };
 
 /*
- * Apply SOS IIR filter to samples
- * 
- * @param input Pointer to input samples (float array)
- * @param output Pointer to output buffer (can be same as input)
- * @param sample_count Number of samples to process
- * @return Sum of squared output samples
- */
-static inline float apply_sos_iir_filter(const SOS_IIR_Filter *filter,
-                                         float *input,
-                                         float *output,
-                                         size_t sample_count,
-                                         int section_count) {
-  float sum_sqr = 0;
-  
-  // Process each sample
-  for (size_t i = 0; i < sample_count; i++) {
-    float sample = input[i];
-    
-    // Apply each SOS section
-    for (int s = 0; s < section_count; s++) {
-      static float w[6][2] = {0};  // State variables for each section
-      
-      // Direct Form II implementation
-      // w(n) = x(n) - a1*w(n-1) - a2*w(n-2)
-      float w_n = sample - filter->sos[s].a1 * w[s][0] - filter->sos[s].a2 * w[s][1];
-      
-      // y(n) = b0*w(n) + b1*w(n-1) + b2*w(n-2)  (b0=1)
-      sample = w_n + filter->sos[s].b1 * w[s][0] + filter->sos[s].b2 * w[s][1];
-      
-      // Update state
-      w[s][1] = w[s][0];
-      w[s][0] = w_n;
-    }
-    
-    // Apply gain
-    sample *= filter->gain;
-    
-    output[i] = sample;
-    sum_sqr += sample * sample;
-  }
-  
-  return sum_sqr;
-}
-
-/*
  * Class wrapper for SOS IIR Filter with state management
  */
 class SOS_IIR_Filter_Cpp {
