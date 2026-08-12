@@ -42,9 +42,10 @@ enum NoiseLevel {
 #define SAMPLE_RATE 48000       // Hz
 #define SAMPLE_BITS 32          // bits
 #define SAMPLE_T int32_t
-#define LEQ_PERIOD 0.15         // seconds (evaluation period)
+// Each I2S block is used directly as the measurement window (no separate
+// LEQ accumulation across blocks).
+#define LEQ_PERIOD (1.0 / 8.0)   // seconds (125ms, matches SAMPLES_SHORT)
 #define SAMPLES_SHORT (SAMPLE_RATE / 8)  // ~125ms blocks
-#define SAMPLES_LEQ (SAMPLE_RATE * LEQ_PERIOD)
 #define DMA_BANK_SIZE (SAMPLES_SHORT / 16)
 #define DMA_BANKS 32
 
