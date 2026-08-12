@@ -30,6 +30,11 @@ struct NetworkSettings {
   uint16_t mqtt_port = 1883;
   String mqtt_user;
   String mqtt_pass;
+
+  // Manual UTC offset (minutes), used to convert NTP-synced time to local
+  // wall-clock time for the hourly-stats hour-of-day buckets. No timezone
+  // database (DST etc.) - just a fixed offset the user sets themselves.
+  int16_t utc_offset_minutes = 0;
 };
 
 //

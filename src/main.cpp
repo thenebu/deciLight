@@ -95,12 +95,18 @@ void setup() {
 void loop() {
   // Get audio level from microphone
   double level_dB = microphone.getLevel();
-  
+  Config config = web_service.getConfigSnapshot();
+
   // Update LED display with current level and config
-  led_controller.handleLevel(level_dB, web_service.getConfigSnapshot());
-  
+  led_controller.handleLevel(level_dB, config);
+
   // Update web interface with current level
   web_service.updateLevel(level_dB);
-  
+
+  // Track today's hour-of-day time distribution, using the same raw
+  // classification MqttService reuses for its "level" sensor - not the
+  // decayed/display level, which is a display-smoothing concern.
+  web_service.accumulateHourlyStat(led_controller.getLevelForDb(level_dB, config));
+
   yield();  // Allow FreeRTOS scheduler to run
 }

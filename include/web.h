@@ -4,7 +4,9 @@
 #include <WebServer.h>
 #include <freertos/FreeRTOS.h>
 #include <ArduinoJson.h>
+#include <time.h>
 #include "network.h"
+#include "config.h"
 
 // Ring buffer size for the history graph: 300 entries @ 1 sample/sec = 5
 // minutes of history.
@@ -36,6 +38,17 @@ public:
   Config getConfigSnapshot();  // Thread-safe copy of the current config
   double getCurrentDb();  // Thread-safe copy of the current dB reading (used by MqttService)
 
+  // Accumulates time spent at `level` into the current hour's bucket for
+  // today's hourly stats. Called once per main-loop iteration (main.cpp)
+  // with the raw (non-decayed) classification of the current dB reading.
+  // No-ops until NTP has synced (see accumulateHourlyStat()'s epoch sanity
+  // check in web.cpp).
+  void accumulateHourlyStat(NoiseLevel level);
+
+  // Clears today's hourly buckets immediately (manual reset button) and
+  // persists right away, unlike the throttled periodic flush.
+  void resetHourlyStats();
+
   // Set once during setup(), before any other task exists (see main.cpp's
   // boot-time warmup average) and only ever read afterward - unlike
   // current_dB/config it doesn't change at runtime, so no lock is needed.
@@ -51,6 +64,8 @@ private:
   void handleApiSet();
   void handleApiStatus();
   void handleApiHistory();
+  void handleHourlyGet();
+  void handleHourlyReset();
   void handleNetworkGet();
   void handleNetworkSet();
   void handleConfigExport();
@@ -60,6 +75,11 @@ private:
   // Configuration methods
   void loadConfig();
   void saveConfig();
+
+  // Hourly-stats persistence (separate "hourstats" NVS namespace - see
+  // web.cpp for the rationale on throttled vs. immediate flush).
+  void loadHourlyStats();
+  void saveHourlyStats();
 
   // JSON (de)serialization helpers, shared by the /api/config handlers and
   // (in a later phase) the export/import endpoints.
@@ -103,6 +123,21 @@ private:
   // the main loop (core 1, via updateLevel) and read from the web task
   // (core 0, via handleApiStatus) - guard with their own spinlock.
   portMUX_TYPE dB_mux;
+
+  // Today's hour-of-day time distribution: hourly_ms[hour][NoiseLevel] in
+  // milliseconds. Written from the main loop (core 1, via
+  // accumulateHourlyStat) and read/reset from the web task (core 0, via
+  // handleHourlyGet/handleHourlyReset) - same cross-core shape as
+  // current_dB/history[], guarded by its own spinlock rather than sharing
+  // dB_mux, mirroring the config_mux/dB_mux split.
+  uint32_t hourly_ms[24][3];      // [hour][NoiseLevel] accumulated ms, "today"
+  int hourly_day;                 // tm_yday of the day these buckets represent
+  int hourly_year;                // tm_year, paired with hourly_day (year-boundary safety)
+  time_t hourly_reset_at;         // epoch of last reset (manual or midnight rollover); 0 = unknown/no time yet
+  unsigned long last_hourly_ms;   // millis() of the last accumulate call, for elapsed-delta
+  unsigned long last_hourly_flush_ms;  // throttles NVS writes
+  bool hourly_dirty;
+  portMUX_TYPE hourly_mux;
 };
 
 // Global instance
