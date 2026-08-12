@@ -3,6 +3,7 @@
 
 #include <WebServer.h>
 #include <freertos/FreeRTOS.h>
+#include <ArduinoJson.h>
 
 // Configuration structure for runtime settings
 struct Config {
@@ -43,6 +44,11 @@ private:
   // Configuration methods
   void loadConfig();
   void saveConfig();
+
+  // JSON (de)serialization helpers, shared by the /api/config handlers and
+  // (in a later phase) the export/import endpoints.
+  static void configToJson(const Config& cfg, JsonObject obj);
+  static void applyJsonToConfig(JsonObjectConst obj, Config& cfg);
 
   // Member variables
   WebServer *server;

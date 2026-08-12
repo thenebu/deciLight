@@ -2,6 +2,7 @@
 #include "config.h"
 #include <Preferences.h>
 #include <WiFi.h>
+#include <ArduinoJson.h>
 
 // Global instance
 WebService web_service;
@@ -170,20 +171,64 @@ void WebService::handleRoot() {
   server->send(200, "text/html", html_ui);
 }
 
+// Fills a JsonDocument with the current config's fields. Shared by
+// handleApiGet() and the export endpoint (added in a later phase) so both
+// stay in sync with the Config struct's shape.
+void WebService::configToJson(const Config& cfg, JsonObject obj) {
+  obj["display_mode"] = cfg.display_mode;
+  obj["db_floor"] = cfg.db_floor;
+  obj["db_normal_switchover"] = cfg.db_normal_switchover;
+  obj["db_warning_switchover"] = cfg.db_warning_switchover;
+  obj["led_brightness"] = cfg.led_brightness;
+  obj["color_normal"] = cfg.color_normal;
+  obj["color_warning"] = cfg.color_warning;
+  obj["color_alert"] = cfg.color_alert;
+  obj["decay_ms"] = cfg.decay_ms;
+  obj["response_ms"] = cfg.response_ms;
+}
+
+// Applies whichever recognized fields are present in `obj` onto `cfg`,
+// clamped to the same ranges the web UI's sliders allow so a malformed or
+// malicious request body can't push the config into a nonsensical or
+// overflowing state. Missing fields are left untouched. Shared by
+// handleApiSet() and the import endpoint (added in a later phase).
+void WebService::applyJsonToConfig(JsonObjectConst obj, Config& cfg) {
+  if (obj["display_mode"].is<int>())
+    cfg.display_mode = constrain(obj["display_mode"].as<int>(), 0, 1);
+
+  if (obj["db_floor"].is<float>())
+    cfg.db_floor = constrain(obj["db_floor"].as<float>(), 20.0f, 60.0f);
+
+  if (obj["db_normal_switchover"].is<float>())
+    cfg.db_normal_switchover = constrain(obj["db_normal_switchover"].as<float>(), 30.0f, 70.0f);
+
+  if (obj["db_warning_switchover"].is<float>())
+    cfg.db_warning_switchover = constrain(obj["db_warning_switchover"].as<float>(), 40.0f, 85.0f);
+
+  if (obj["led_brightness"].is<int>())
+    cfg.led_brightness = constrain(obj["led_brightness"].as<int>(), 0, 255);
+
+  if (obj["color_normal"].is<uint32_t>())
+    cfg.color_normal = constrain(obj["color_normal"].as<uint32_t>(), 0u, 0xFFFFFFu);
+
+  if (obj["color_warning"].is<uint32_t>())
+    cfg.color_warning = constrain(obj["color_warning"].as<uint32_t>(), 0u, 0xFFFFFFu);
+
+  if (obj["color_alert"].is<uint32_t>())
+    cfg.color_alert = constrain(obj["color_alert"].as<uint32_t>(), 0u, 0xFFFFFFu);
+
+  if (obj["decay_ms"].is<int>())
+    cfg.decay_ms = constrain(obj["decay_ms"].as<int>(), 0, 3000);
+
+  if (obj["response_ms"].is<int>())
+    cfg.response_ms = constrain(obj["response_ms"].as<int>(), 0, 500);
+}
+
 void WebService::handleApiGet() {
-  char json[600];
-  snprintf(json, sizeof(json),
-    "{\"display_mode\":%d,\"db_floor\":%.1f,\"db_normal_switchover\":%.1f,\"db_warning_switchover\":%.1f,\"led_brightness\":%d,\"color_normal\":%u,\"color_warning\":%u,\"color_alert\":%u,\"decay_ms\":%d,\"response_ms\":%d}",
-    config.display_mode,
-    config.db_floor,
-    config.db_normal_switchover,
-    config.db_warning_switchover,
-    config.led_brightness,
-    config.color_normal,
-    config.color_warning,
-    config.color_alert,
-    config.decay_ms,
-    config.response_ms);
+  DynamicJsonDocument doc(384);
+  configToJson(config, doc.to<JsonObject>());
+  String json;
+  serializeJson(doc, json);
   server->send(200, "application/json", json);
 }
 
@@ -197,107 +242,18 @@ void WebService::handleApiSet() {
   String body = server->arg("plain");
   log_i("Received JSON: %s", body.c_str());
 
+  DynamicJsonDocument doc(384);
+  DeserializationError err = deserializeJson(doc, body);
+  if (err) {
+    log_e("[WEB] JSON parse failed: %s", err.c_str());
+    server->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+    return;
+  }
+
   // Parse into a local copy first, so the shared `config` is only touched
-  // once, briefly, under the lock below - not held across string parsing
-  // (which allocates) for the whole request.
+  // once, briefly, under the lock below.
   Config new_config = getConfigSnapshot();
-
-  // Simple JSON parsing. Parsed values are clamped to the same ranges the
-  // web UI's sliders allow, so a malformed/malicious request body can't
-  // push the config into a nonsensical or overflowing state.
-  int mode_pos = body.indexOf("\"display_mode\":");
-  if (mode_pos >= 0) {
-    int mode = body.substring(mode_pos + 15, mode_pos + 16).toInt();
-    new_config.display_mode = constrain(mode, 0, 1);
-  }
-
-  int floor_pos = body.indexOf("\"db_floor\":");
-  if (floor_pos >= 0) {
-    int end = body.indexOf(",", floor_pos);
-    if (end < 0) end = body.indexOf("}", floor_pos);
-    String val = body.substring(floor_pos + 11, end);
-    new_config.db_floor = constrain(val.toFloat(), 20.0f, 60.0f);
-    log_i("Parsed floor: '%s' = %.1f", val.c_str(), new_config.db_floor);
-  }
-
-  int green_pos = body.indexOf("\"db_normal_switchover\":");
-  if (green_pos >= 0) {
-    int end = body.indexOf(",", green_pos);
-    if (end < 0) end = body.indexOf("}", green_pos);
-    String val = body.substring(green_pos + 23, end);
-    val.trim();
-    new_config.db_normal_switchover = constrain(val.toFloat(), 30.0f, 70.0f);
-    log_i("Parsed normal: '%s' = %.1f", val.c_str(), new_config.db_normal_switchover);
-  }
-
-  int yellow_pos = body.indexOf("\"db_warning_switchover\":");
-  if (yellow_pos >= 0) {
-    int end = body.indexOf(",", yellow_pos);
-    if (end < 0) end = body.indexOf("}", yellow_pos);
-    String val = body.substring(yellow_pos + 24, end);
-    val.trim();
-    new_config.db_warning_switchover = constrain(val.toFloat(), 40.0f, 85.0f);
-    log_i("Parsed warning: '%s' = %.1f", val.c_str(), new_config.db_warning_switchover);
-  }
-
-  int bright_pos = body.indexOf("\"led_brightness\":");
-  if (bright_pos >= 0) {
-    int end = body.indexOf(",", bright_pos);
-    if (end < 0) end = body.indexOf("}", bright_pos);
-    String val = body.substring(bright_pos + 17, end);
-    // Clamp before narrowing to uint8_t - assigning a negative/out-of-range
-    // int directly would silently wrap instead of clamping.
-    new_config.led_brightness = constrain((int)val.toInt(), 0, 255);
-  }
-
-  int col_green_pos = body.indexOf("\"color_normal\":");
-  if (col_green_pos >= 0) {
-    int start = col_green_pos + 15;
-    int end = body.indexOf(",", col_green_pos);
-    if (end < 0) end = body.indexOf("}", col_green_pos);
-    String val = body.substring(start, end);
-    val.trim();
-    uint32_t parsed = strtoul(val.c_str(), NULL, 10);
-    if (parsed > 0) new_config.color_normal = constrain(parsed, 0u, 0xFFFFFFu);
-  }
-
-  int col_yellow_pos = body.indexOf("\"color_warning\":");
-  if (col_yellow_pos >= 0) {
-    int start = col_yellow_pos + 16;
-    int end = body.indexOf(",", col_yellow_pos);
-    if (end < 0) end = body.indexOf("}", col_yellow_pos);
-    String val = body.substring(start, end);
-    val.trim();
-    uint32_t parsed = strtoul(val.c_str(), NULL, 10);
-    if (parsed > 0) new_config.color_warning = constrain(parsed, 0u, 0xFFFFFFu);
-  }
-
-  int col_red_pos = body.indexOf("\"color_alert\":");
-  if (col_red_pos >= 0) {
-    int start = col_red_pos + 14;
-    int end = body.indexOf(",", col_red_pos);
-    if (end < 0) end = body.indexOf("}", col_red_pos);
-    String val = body.substring(start, end);
-    val.trim();
-    uint32_t parsed = strtoul(val.c_str(), NULL, 10);
-    if (parsed > 0) new_config.color_alert = constrain(parsed, 0u, 0xFFFFFFu);
-  }
-
-  int decay_pos = body.indexOf("\"decay_ms\":");
-  if (decay_pos >= 0) {
-    int end = body.indexOf(",", decay_pos);
-    if (end < 0) end = body.indexOf("}", decay_pos);
-    String val = body.substring(decay_pos + 11, end);
-    new_config.decay_ms = constrain((int)val.toInt(), 0, 3000);
-  }
-
-  int response_pos = body.indexOf("\"response_ms\":");
-  if (response_pos >= 0) {
-    int end = body.indexOf(",", response_pos);
-    if (end < 0) end = body.indexOf("}", response_pos);
-    String val = body.substring(response_pos + 14, end);
-    new_config.response_ms = constrain((int)val.toInt(), 0, 500);
-  }
+  applyJsonToConfig(doc.as<JsonObjectConst>(), new_config);
 
   portENTER_CRITICAL(&config_mux);
   config = new_config;
@@ -315,8 +271,10 @@ void WebService::handleApiStatus() {
   double dB_snapshot = current_dB;
   portEXIT_CRITICAL(&dB_mux);
 
-  char json[64];
-  snprintf(json, sizeof(json), "{\"db\":%.1f}", dB_snapshot);
+  DynamicJsonDocument doc(64);
+  doc["db"] = dB_snapshot;
+  String json;
+  serializeJson(doc, json);
   server->send(200, "application/json", json);
 }
 
