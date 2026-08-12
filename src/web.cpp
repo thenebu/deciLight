@@ -402,8 +402,11 @@ void WebService::applyJsonToNetworkSettings(JsonObjectConst obj, NetworkSettings
   if (obj["mqtt_pass"].is<const char*>() && (allow_empty_password || strlen(obj["mqtt_pass"]) > 0))
     s.mqtt_pass = obj["mqtt_pass"].as<const char*>();
 
-  if (obj["utc_offset_minutes"].is<int>())
-    s.utc_offset_minutes = constrain(obj["utc_offset_minutes"].as<int>(), -720, 840);
+  // POSIX TZ string, e.g. "CET-1CEST,M3.5.0,M10.5.0/3" - no numeric range to
+  // clamp here (configTzTime() just ignores a malformed string and treats
+  // it as UTC), an empty field falls back to the default.
+  if (obj["tz_string"].is<const char*>() && strlen(obj["tz_string"]) > 0)
+    s.tz_string = obj["tz_string"].as<const char*>();
 }
 
 void WebService::handleApiGet() {
@@ -551,7 +554,7 @@ void WebService::handleNetworkGet() {
   doc["mqtt_host"] = s.mqtt_host;
   doc["mqtt_port"] = s.mqtt_port;
   doc["mqtt_user"] = s.mqtt_user;
-  doc["utc_offset_minutes"] = s.utc_offset_minutes;
+  doc["tz_string"] = s.tz_string;
 
   String json;
   serializeJson(doc, json);
@@ -609,7 +612,7 @@ void WebService::handleConfigExport() {
   network_obj["mqtt_port"] = net.mqtt_port;
   network_obj["mqtt_user"] = net.mqtt_user;
   network_obj["mqtt_pass"] = net.mqtt_pass;
-  network_obj["utc_offset_minutes"] = net.utc_offset_minutes;
+  network_obj["tz_string"] = net.tz_string;
 
   String json;
   serializeJson(doc, json);
@@ -1092,8 +1095,8 @@ const char* html_ui = R"rawliteral(
       </div>
 
       <div class="range-container">
-        <label>UTC-Offset (Stunden) <span style="font-weight:400; color:#999;">- für Tagesstatistik-Stunden</span></label>
-        <input type="number" id="utc-offset" step="0.5" min="-12" max="14" value="0"
+        <label>Zeitzone (POSIX TZ) <span style="font-weight:400; color:#999;">- für Tagesstatistik-Stunden, berücksichtigt Sommer-/Winterzeit</span></label>
+        <input type="text" id="tz-string" placeholder="CET-1CEST,M3.5.0,M10.5.0/3"
           style="width:100%; padding:8px; border:1px solid #ddd; border-radius:4px;">
       </div>
 
@@ -1394,7 +1397,7 @@ const char* html_ui = R"rawliteral(
         document.getElementById('mqtt-host').value = data.mqtt_host || '';
         document.getElementById('mqtt-port').value = data.mqtt_port || 1883;
         document.getElementById('mqtt-user').value = data.mqtt_user || '';
-        document.getElementById('utc-offset').value = (data.utc_offset_minutes || 0) / 60;
+        document.getElementById('tz-string').value = data.tz_string || '';
       } catch (e) {
         console.error('Failed to load network settings:', e);
       }
@@ -1403,13 +1406,13 @@ const char* html_ui = R"rawliteral(
     async function saveNetwork() {
       const ssid = document.getElementById('wifi-ssid').value;
       const pass = document.getElementById('wifi-pass').value;
-      const utcOffsetMinutes = Math.round(parseFloat(document.getElementById('utc-offset').value) * 60) || 0;
+      const tzString = document.getElementById('tz-string').value;
 
       try {
         const res = await fetch('/api/network', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ wifi_ssid: ssid, wifi_pass: pass, utc_offset_minutes: utcOffsetMinutes })
+          body: JSON.stringify({ wifi_ssid: ssid, wifi_pass: pass, tz_string: tzString })
         });
 
         const status = document.getElementById('wifi-status');

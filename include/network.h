@@ -14,6 +14,12 @@
 // WiFi STA connect timeout before falling back to AP mode.
 #define WIFI_CONNECT_TIMEOUT_MS 15000
 
+// Default POSIX TZ string (see NetworkSettings::tz_string) - Europe/Berlin,
+// including its DST rule (CEST from the last Sunday in March to the last
+// Sunday in October). Just a starting point; overridable via the web UI
+// for any other region.
+#define TZ_STRING_DEFAULT "CET-1CEST,M3.5.0,M10.5.0/3"
+
 // Baked in at build time from a gitignored .env file (see .env.example and
 // load_env.py) - only used as the first-boot NVS default in
 // NetworkService::loadSettings(). Once WiFi settings are saved via the web
@@ -43,10 +49,13 @@ struct NetworkSettings {
   String mqtt_user;
   String mqtt_pass;
 
-  // Manual UTC offset (minutes), used to convert NTP-synced time to local
-  // wall-clock time for the hourly-stats hour-of-day buckets. No timezone
-  // database (DST etc.) - just a fixed offset the user sets themselves.
-  int16_t utc_offset_minutes = 0;
+  // POSIX TZ string (e.g. "CET-1CEST,M3.5.0,M10.5.0/3" for Europe/Berlin),
+  // used to convert NTP-synced UTC to local wall-clock time for the
+  // hourly-stats hour-of-day buckets. Passed straight to configTzTime(),
+  // which - unlike a plain fixed UTC offset - correctly applies the DST
+  // transition rule encoded in the string, so hour buckets stay correct
+  // across summer/winter time changes without needing manual adjustment.
+  String tz_string = TZ_STRING_DEFAULT;
 };
 
 //
