@@ -56,6 +56,11 @@ private:
   // with this spinlock so readers never observe a torn write.
   portMUX_TYPE config_mux;
   Config config;
+
+  // current_dB/last_dB_update have the same cross-core shape: written from
+  // the main loop (core 1, via updateLevel) and read from the web task
+  // (core 0, via handleApiStatus) - guard with their own spinlock.
+  portMUX_TYPE dB_mux;
 };
 
 // Global instance
