@@ -45,7 +45,11 @@ public:
   // from the web task (HTTP handlers run there, and init() itself runs
   // during setup() before other tasks exist), so no lock is needed.
   NetworkSettings getSettings() const { return settings; }
-  void applySettings(const NetworkSettings& new_settings);  // Save + reconnect
+
+  // Persists new_settings. Only reconnects WiFi (which briefly disrupts
+  // connectivity/blocks the caller) if wifi_ssid/wifi_pass actually
+  // changed - e.g. saving MQTT-only settings must not bounce the WiFi link.
+  void applySettings(const NetworkSettings& new_settings);
   bool isStaConnected() const;
 
   // Pumps ArduinoOTA's handler - call from the existing 50ms web task loop

@@ -29,6 +29,7 @@ public:
   void startTask();         // Create and start the web task
   void updateLevel(double dB_current);  // Update current dB level for status endpoint
   Config getConfigSnapshot();  // Thread-safe copy of the current config
+  double getCurrentDb();  // Thread-safe copy of the current dB reading (used by MqttService)
 
 private:
   static void webTaskWrapper(void *param);  // Static task wrapper

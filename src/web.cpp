@@ -1,6 +1,7 @@
 #include "web.h"
 #include "config.h"
 #include "network.h"
+#include "mqtt.h"
 #include <Preferences.h>
 #include <WiFi.h>
 #include <ArduinoJson.h>
@@ -133,6 +134,10 @@ void WebService::webTaskHandler() {
     // Pump ArduinoOTA (no-ops until STA is connected and OTA is armed)
     network_service.handleOta();
 
+    // Maintain MQTT connection + periodic state publish (no-ops until a
+    // broker host is configured and STA is connected)
+    mqtt_service.loop();
+
     // Check if config save is pending (deferred from HTTP handler)
     if (needs_save) {
       needs_save = false;
@@ -162,6 +167,13 @@ Config WebService::getConfigSnapshot() {
   portENTER_CRITICAL(&config_mux);
   Config snapshot = config;
   portEXIT_CRITICAL(&config_mux);
+  return snapshot;
+}
+
+double WebService::getCurrentDb() {
+  portENTER_CRITICAL(&dB_mux);
+  double snapshot = current_dB;
+  portEXIT_CRITICAL(&dB_mux);
   return snapshot;
 }
 
@@ -696,6 +708,38 @@ const char* html_ui = R"rawliteral(
 
       <button onclick="saveNetwork()">WLAN speichern &amp; verbinden</button>
     </div>
+
+    <div class="section" style="margin-top: 25px;">
+      <div class="section-title">MQTT / Home Assistant</div>
+
+      <div class="range-container">
+        <label>Broker-Host <span style="font-weight:400; color:#999;">(leer lassen, um MQTT zu deaktivieren)</span></label>
+        <input type="text" id="mqtt-host" placeholder="z.B. 192.168.1.10 oder homeassistant.local"
+          style="width:100%; padding:8px; border:1px solid #ddd; border-radius:4px;">
+      </div>
+
+      <div class="range-container">
+        <label>Port</label>
+        <input type="number" id="mqtt-port" value="1883" min="1" max="65535"
+          style="width:100%; padding:8px; border:1px solid #ddd; border-radius:4px;">
+      </div>
+
+      <div class="range-container">
+        <label>Benutzer <span style="font-weight:400; color:#999;">(optional)</span></label>
+        <input type="text" id="mqtt-user"
+          style="width:100%; padding:8px; border:1px solid #ddd; border-radius:4px;">
+      </div>
+
+      <div class="range-container">
+        <label>Passwort <span style="font-weight:400; color:#999;">(leer lassen, um bestehendes zu behalten)</span></label>
+        <input type="password" id="mqtt-pass" placeholder="········"
+          style="width:100%; padding:8px; border:1px solid #ddd; border-radius:4px;">
+      </div>
+
+      <div id="mqtt-status" class="status" style="display:none;"></div>
+
+      <button onclick="saveMqtt()">MQTT speichern</button>
+    </div>
   </div>
 
   <script>
@@ -830,6 +874,10 @@ const char* html_ui = R"rawliteral(
         document.getElementById('wifi-state').textContent = data.wifi_connected
           ? ('Verbunden (' + data.wifi_ssid + ')')
           : (data.wifi_ssid ? 'Nicht verbunden - AP-Fallback aktiv' : 'Kein WLAN konfiguriert - AP-Fallback aktiv');
+
+        document.getElementById('mqtt-host').value = data.mqtt_host || '';
+        document.getElementById('mqtt-port').value = data.mqtt_port || 1883;
+        document.getElementById('mqtt-user').value = data.mqtt_user || '';
       } catch (e) {
         console.error('Failed to load network settings:', e);
       }
@@ -859,6 +907,35 @@ const char* html_ui = R"rawliteral(
         setTimeout(() => { status.style.display = 'none'; loadNetwork(); }, 4000);
       } catch (e) {
         console.error('Network save failed:', e);
+      }
+    }
+
+    async function saveMqtt() {
+      const host = document.getElementById('mqtt-host').value;
+      const port = parseInt(document.getElementById('mqtt-port').value) || 1883;
+      const user = document.getElementById('mqtt-user').value;
+      const pass = document.getElementById('mqtt-pass').value;
+
+      try {
+        const res = await fetch('/api/network', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mqtt_host: host, mqtt_port: port, mqtt_user: user, mqtt_pass: pass })
+        });
+
+        const status = document.getElementById('mqtt-status');
+        if (res.ok) {
+          status.className = 'status success';
+          status.textContent = '✓ MQTT-Einstellungen gespeichert';
+        } else {
+          status.className = 'status';
+          status.textContent = '✗ Speichern fehlgeschlagen';
+        }
+        status.style.display = 'block';
+        document.getElementById('mqtt-pass').value = '';
+        setTimeout(() => { status.style.display = 'none'; loadNetwork(); }, 4000);
+      } catch (e) {
+        console.error('MQTT save failed:', e);
       }
     }
 

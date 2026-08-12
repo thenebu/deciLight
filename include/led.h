@@ -14,9 +14,13 @@ public:
   void init();              // Initialize NeoPixel strip
   void handleLevel(double dB_current, const Config& config);  // Update LED display
 
+  // Classify a dB reading into a NoiseLevel using the configured
+  // switchover thresholds. Public so MqttService can reuse the exact same
+  // classification for its "level" sensor instead of duplicating it.
+  NoiseLevel getLevelForDb(double dB_current, const Config& config);
+
 private:
   // Display mode implementations
-  NoiseLevel getLevelForDb(double dB_current, const Config& config);
   uint32_t getColorForLevel(double dB_current, const Config& config);
   uint32_t getColorForNoiseLevel(NoiseLevel level, const Config& config);
   void displayTrafficLight(double dB_current, const Config& config, uint32_t now);

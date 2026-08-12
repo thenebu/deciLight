@@ -92,8 +92,15 @@ bool NetworkService::isStaConnected() const {
 }
 
 void NetworkService::applySettings(const NetworkSettings& new_settings) {
+  bool wifi_changed = (new_settings.wifi_ssid != settings.wifi_ssid) ||
+                       (new_settings.wifi_pass != settings.wifi_pass);
+
   settings = new_settings;
   saveSettings();
+
+  if (!wifi_changed) {
+    return;  // e.g. an MQTT-only save - don't bounce a working WiFi link
+  }
 
   // Reconnect immediately so a changed SSID/password takes effect without
   // requiring a reboot. If the new credentials don't work, fall back to AP

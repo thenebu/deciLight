@@ -23,6 +23,7 @@
 #include "led.h"
 #include "microphone.h"
 #include "network.h"
+#include "mqtt.h"
 #include "web.h"
 
 //
@@ -51,7 +52,11 @@ void setup() {
 
   // Initialize web service
   web_service.init();
-  
+
+  // Initialize MQTT (connection itself is deferred and driven from the web
+  // task loop - see WebService::webTaskHandler())
+  mqtt_service.init();
+
   // Start RTOS tasks
   web_service.startTask();
   
