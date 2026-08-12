@@ -42,7 +42,32 @@ void setup() {
 
   // Initialize microphone (starts I2S reader task)
   microphone.init();
-  
+
+  // Auto-baseline: sample the ambient level for a few seconds right after
+  // boot and average it into a suggested noise floor. Deliberately NOT
+  // written into config.db_floor automatically - that would silently
+  // override a saved user setting on every reboot. Instead it's exposed
+  // as `suggested_floor` on /api/status, and the web UI offers it as a
+  // one-click suggestion next to the existing "Current" button.
+  {
+    const uint32_t warmup_ms = 4000;
+    const uint32_t sample_interval_ms = 200;
+    double sum = 0.0;
+    int samples = 0;
+    uint32_t warmup_start = millis();
+    log_i("[BOOT] Sampling ambient level for baseline suggestion (%dms)...", warmup_ms);
+    while (millis() - warmup_start < warmup_ms) {
+      sum += microphone.getLevel();
+      samples++;
+      delay(sample_interval_ms);
+    }
+    if (samples > 0) {
+      double suggested = sum / samples;
+      web_service.setSuggestedFloor(suggested);
+      log_i("[BOOT] Suggested floor: %.1f dB (%d samples)", suggested, samples);
+    }
+  }
+
   // Initialize LED controller
   led_controller.init();
 

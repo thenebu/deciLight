@@ -289,8 +289,11 @@ void WebService::handleApiStatus() {
   double dB_snapshot = current_dB;
   portEXIT_CRITICAL(&dB_mux);
 
-  DynamicJsonDocument doc(64);
+  DynamicJsonDocument doc(96);
   doc["db"] = dB_snapshot;
+  if (suggested_floor > 0.0) {
+    doc["suggested_floor"] = suggested_floor;
+  }
   String json;
   serializeJson(doc, json);
   server->send(200, "application/json", json);
@@ -735,8 +738,9 @@ const char* html_ui = R"rawliteral(
           <button style="width: auto; padding: 6px 12px; margin-top: 0; font-size: 12px;" onclick="setFloorToCurrent()">Current</button>
         </div>
         <input type="range" id="floor-slider" min="20" max="60" step="1" value="37" onchange="updatePreview()">
+        <div id="suggested-floor-hint" style="display:none; font-size: 12px; color: #667eea; margin-top: 4px;"></div>
       </div>
-      
+
       <div class="range-container">
         <label>Green→Yellow Switchover <span class="value-display" id="green-val">50 dB</span></label>
         <input type="range" id="green-slider" min="30" max="70" step="1" value="50" onchange="updatePreview()">
@@ -847,9 +851,21 @@ const char* html_ui = R"rawliteral(
         const maxDb = 80;
         const normalized = Math.max(0, Math.min(1, (data.db - minDb) / (maxDb - minDb)));
         document.getElementById('live-bar').style.width = (normalized * 100) + '%';
+
+        const hint = document.getElementById('suggested-floor-hint');
+        if (data.suggested_floor !== undefined) {
+          hint.innerHTML = 'Vorschlag beim letzten Boot: ' + data.suggested_floor.toFixed(1) +
+            ' dB - <a href="#" onclick="applySuggestedFloor(' + data.suggested_floor + '); return false;">übernehmen?</a>';
+          hint.style.display = 'block';
+        }
       } catch (e) {
         console.error('Status update failed:', e);
       }
+    }
+
+    function applySuggestedFloor(value) {
+      document.getElementById('floor-slider').value = Math.round(value);
+      updatePreview();
     }
 
     async function loadConfig() {

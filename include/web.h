@@ -31,6 +31,11 @@ public:
   Config getConfigSnapshot();  // Thread-safe copy of the current config
   double getCurrentDb();  // Thread-safe copy of the current dB reading (used by MqttService)
 
+  // Set once during setup(), before any other task exists (see main.cpp's
+  // boot-time warmup average) and only ever read afterward - unlike
+  // current_dB/config it doesn't change at runtime, so no lock is needed.
+  void setSuggestedFloor(double dB) { suggested_floor = dB; }
+
 private:
   static void webTaskWrapper(void *param);  // Static task wrapper
   void webTaskHandler();    // Instance task handler
@@ -61,6 +66,7 @@ private:
   unsigned long last_dB_update;
   bool needs_save;
   TaskHandle_t task_handle;
+  double suggested_floor = 0.0;  // 0 = no suggestion available yet (see setSuggestedFloor)
 
   // config is written from the web task (core 0, via handleApiSet) and read
   // from the main loop (core 1, via getConfigSnapshot); guard both sides
