@@ -5,6 +5,10 @@
 #include <freertos/FreeRTOS.h>
 #include <ArduinoJson.h>
 
+// Ring buffer size for the history graph: 300 entries @ 1 sample/sec = 5
+// minutes of history.
+#define HISTORY_SIZE 300
+
 // Configuration structure for runtime settings
 struct Config {
   int display_mode;           // 0=TRAFFIC_LIGHT, 1=VU_METER
@@ -45,6 +49,7 @@ private:
   void handleApiGet();
   void handleApiSet();
   void handleApiStatus();
+  void handleApiHistory();
   void handleNetworkGet();
   void handleNetworkSet();
   void handleConfigExport();
@@ -67,6 +72,17 @@ private:
   bool needs_save;
   TaskHandle_t task_handle;
   double suggested_floor = 0.0;  // 0 = no suggestion available yet (see setSuggestedFloor)
+
+  // 1-sample/sec ring buffer feeding the web UI's history graph. Written
+  // from updateLevel() (core 1, downsampled off last_dB_update) and read
+  // from handleApiHistory() (web task, core 0) - same cross-core shape as
+  // current_dB, so it's guarded by the same dB_mux rather than a new lock.
+  // Plain floats only (no heap allocation), so it's safe to touch inside
+  // that existing critical section.
+  float history[HISTORY_SIZE];
+  int history_count;               // valid entries so far, caps at HISTORY_SIZE
+  int history_next;                // next write index (ring buffer)
+  unsigned long last_history_sample_ms;
 
   // config is written from the web task (core 0, via handleApiSet) and read
   // from the main loop (core 1, via getConfigSnapshot); guard both sides

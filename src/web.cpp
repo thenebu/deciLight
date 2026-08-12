@@ -25,7 +25,10 @@ WebService::WebService()
     needs_save(false),
     task_handle(nullptr),
     config_mux(portMUX_INITIALIZER_UNLOCKED),
-    dB_mux(portMUX_INITIALIZER_UNLOCKED)
+    dB_mux(portMUX_INITIALIZER_UNLOCKED),
+    history_count(0),
+    history_next(0),
+    last_history_sample_ms(0)
 {
   config = {
     .display_mode = DISPLAY_MODE,
@@ -71,6 +74,9 @@ void WebService::init() {
   
   server->on("/api/status", HTTP_GET, [this]() { this->handleApiStatus(); });
   log_i("[WEB] Route /api/status registered");
+
+  server->on("/api/history", HTTP_GET, [this]() { this->handleApiHistory(); });
+  log_i("[WEB] Route /api/history registered");
 
   server->on("/api/network", HTTP_GET, [this]() { this->handleNetworkGet(); });
   server->on("/api/network", HTTP_POST, [this]() { this->handleNetworkSet(); });
@@ -158,9 +164,20 @@ void WebService::webTaskHandler() {
 // WebService::updateLevel() - Update current dB level
 //============================================
 void WebService::updateLevel(double dB_current) {
+  unsigned long now = millis();
+
   portENTER_CRITICAL(&dB_mux);
   current_dB = dB_current;
-  last_dB_update = millis();
+  last_dB_update = now;
+
+  // Downsample into the 1-sample/sec history ring buffer, reusing the
+  // same timestamp this call already computed.
+  if (history_count == 0 || (now - last_history_sample_ms) >= 1000) {
+    last_history_sample_ms = now;
+    history[history_next] = (float)dB_current;
+    history_next = (history_next + 1) % HISTORY_SIZE;
+    if (history_count < HISTORY_SIZE) history_count++;
+  }
   portEXIT_CRITICAL(&dB_mux);
 }
 
@@ -294,6 +311,40 @@ void WebService::handleApiStatus() {
   if (suggested_floor > 0.0) {
     doc["suggested_floor"] = suggested_floor;
   }
+  String json;
+  serializeJson(doc, json);
+  server->send(200, "application/json", json);
+}
+
+// GET /api/history - oldest-to-newest JSON array of the last HISTORY_SIZE
+// (5 minutes @ 1/sec) dB readings, for the web UI's canvas line plot.
+void WebService::handleApiHistory() {
+  // Static, not a stack array: the web task's stack is only 4096 bytes
+  // (see startTask()), and HISTORY_SIZE*sizeof(float) plus this function's
+  // own frame would eat a meaningful chunk of that. handleClient() only
+  // processes one request at a time on this task, so a single shared
+  // buffer here is safe.
+  static float snapshot[HISTORY_SIZE];
+  int count, next;
+
+  portENTER_CRITICAL(&dB_mux);
+  count = history_count;
+  next = history_next;
+  memcpy(snapshot, history, sizeof(history));
+  portEXIT_CRITICAL(&dB_mux);
+
+  // JSON array is built outside the critical section - ArduinoJson
+  // allocates on the heap, which (like String) must not happen inside a
+  // portENTER_CRITICAL/portEXIT_CRITICAL section on ESP32.
+  DynamicJsonDocument doc(HISTORY_SIZE * 16 + 64);
+  JsonArray arr = doc.to<JsonArray>();
+
+  int oldest = (count < HISTORY_SIZE) ? 0 : next;
+  for (int i = 0; i < count; i++) {
+    int idx = (oldest + i) % HISTORY_SIZE;
+    arr.add(snapshot[idx]);
+  }
+
   String json;
   serializeJson(doc, json);
   server->send(200, "application/json", json);
@@ -696,6 +747,12 @@ const char* html_ui = R"rawliteral(
         <div class="level-bar" id="live-bar"></div>
       </div>
     </div>
+
+    <div class="section">
+      <div class="section-title">Verlauf (5 min)</div>
+      <canvas id="history-canvas" width="440" height="120"
+        style="width:100%; height:120px; background:#f8f9fa; border-radius:8px;"></canvas>
+    </div>
     
     <div class="section">
       <div class="section-title">Display Mode</div>
@@ -866,6 +923,35 @@ const char* html_ui = R"rawliteral(
     function applySuggestedFloor(value) {
       document.getElementById('floor-slider').value = Math.round(value);
       updatePreview();
+    }
+
+    async function updateHistory() {
+      try {
+        const res = await fetch('/api/history');
+        const data = await res.json();
+        if (!Array.isArray(data) || data.length < 2) return;
+
+        const canvas = document.getElementById('history-canvas');
+        const ctx = canvas.getContext('2d');
+        const w = canvas.width, h = canvas.height;
+        ctx.clearRect(0, 0, w, h);
+
+        const minDb = Math.min(...data) - 2;
+        const maxDb = Math.max(...data) + 2;
+        const range = Math.max(1, maxDb - minDb);
+
+        ctx.strokeStyle = '#667eea';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        data.forEach((db, i) => {
+          const x = (i / (data.length - 1)) * w;
+          const y = h - ((db - minDb) / range) * h;
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+      } catch (e) {
+        console.error('History update failed:', e);
+      }
     }
 
     async function loadConfig() {
@@ -1103,6 +1189,8 @@ const char* html_ui = R"rawliteral(
       loadNetwork();
       updateLiveLevel();
       setInterval(updateLiveLevel, 200);
+      updateHistory();
+      setInterval(updateHistory, 5000);
     };
   </script>
 </body>
