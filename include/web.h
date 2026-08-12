@@ -99,6 +99,15 @@ private:
   double current_dB;
   unsigned long last_dB_update;
   bool needs_save;
+
+  // NetworkService::applySettings() blocks for up to WIFI_CONNECT_TIMEOUT_MS
+  // reconnecting WiFi. Calling it directly from an HTTP handler - even
+  // after server->send() - still blocks the browser, because the
+  // underlying TCP connection isn't actually closed until the handler
+  // function returns. Deferring it one tick into webTaskHandler()'s loop
+  // (same pattern as needs_save) lets the response finish flushing first.
+  bool network_settings_pending;
+  NetworkSettings pending_network_settings;
   TaskHandle_t task_handle;
   double suggested_floor = 0.0;  // 0 = no suggestion available yet (see setSuggestedFloor)
 
