@@ -48,7 +48,6 @@ void setup() {
   web_service.init();
   
   // Start RTOS tasks
-  led_controller.startTask();
   web_service.startTask();
   
   log_e("=== SYSTEM READY ===\n");
@@ -63,7 +62,7 @@ void loop() {
   double level_dB = microphone.getLevel();
   
   // Update LED display with current level and config
-  led_controller.handleLevel(level_dB, web_service.config);
+  led_controller.handleLevel(level_dB, web_service.getConfigSnapshot());
   
   // Update web interface with current level
   web_service.updateLevel(level_dB);

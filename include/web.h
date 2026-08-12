@@ -27,6 +27,7 @@ public:
   void init();              // Initialize WiFi AP and HTTP server
   void startTask();         // Create and start the web task
   void updateLevel(double dB_current);  // Update current dB level for status endpoint
+  Config getConfigSnapshot();  // Thread-safe copy of the current config
 
 private:
   static void webTaskWrapper(void *param);  // Static task wrapper
@@ -50,9 +51,16 @@ private:
   bool needs_save;
   TaskHandle_t task_handle;
 
-public:
-  // Public config (accessed from main loop)
+  // config is written from the web task (core 0, via handleApiSet) and read
+  // from the main loop (core 1, via getConfigSnapshot); guard both sides
+  // with this spinlock so readers never observe a torn write.
+  portMUX_TYPE config_mux;
   Config config;
+
+  // current_dB/last_dB_update have the same cross-core shape: written from
+  // the main loop (core 1, via updateLevel) and read from the web task
+  // (core 0, via handleApiStatus) - guard with their own spinlock.
+  portMUX_TYPE dB_mux;
 };
 
 // Global instance

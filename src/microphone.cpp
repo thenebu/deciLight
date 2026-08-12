@@ -14,15 +14,14 @@ static Microphone* g_microphone = nullptr;
 QueueHandle_t samples_queue = nullptr;
 float samples[SAMPLES_SHORT] __attribute__((aligned(4)));
 
+// Raw I2S read buffer, kept separate from `samples` to avoid strict-aliasing
+// violations when converting int32 -> float in place.
+static int32_t raw_samples[SAMPLES_SHORT] __attribute__((aligned(4)));
+
 //
-// SOS IIR FILTER STRUCTURE
+// SOS IIR FILTER COEFFICIENTS
+// (SOS_IIR_Filter struct is defined in sos-iir-filter.h, included via microphone.h)
 //
-struct SOS_IIR_Filter {
-  float gain;
-  struct {
-    float b1, b2, a1, a2;
-  } sos[6];
-};
 
 // INMP441 Equalizer Filter
 const SOS_IIR_Filter INMP441_filter = {
@@ -46,19 +45,11 @@ const SOS_IIR_Filter A_weighting_filter = {
 //============================================
 Microphone::Microphone()
   : reader_task_handle(nullptr),
-    samples_queue(nullptr),
     current_level(30.0),
-    smoothed_level(30.0)
+    smoothed_level(30.0),
+    equalizer_(&INMP441_filter, 1),
+    aweight_(&A_weighting_filter, 4)
 {
-  // Filter state arrays as members
-  for (int i = 0; i < 1; i++) {
-    inmp441_state[i][0] = 0;
-    inmp441_state[i][1] = 0;
-  }
-  for (int i = 0; i < 4; i++) {
-    aweight_state[i][0] = 0;
-    aweight_state[i][1] = 0;
-  }
 }
 
 //============================================
@@ -67,10 +58,11 @@ Microphone::Microphone()
 void Microphone::init() {
   log_i("Microphone: Initializing...");
   
-  // Create queue for audio samples
-  samples_queue = xQueueCreate(8, sizeof(AudioSample));
-  ::samples_queue = samples_queue;  // Store in global for backward compatibility
-  
+  // Create a length-1 "mailbox" queue: getLevel() only ever wants the most
+  // recent block, so the reader task uses xQueueOverwrite() to keep the
+  // latest sample without ever blocking (see i2sReaderTask()).
+  samples_queue = xQueueCreate(1, sizeof(AudioSample));
+
   if (samples_queue == nullptr) {
     log_e("ERROR: Queue creation failed!");
     return;
@@ -213,7 +205,7 @@ void Microphone::i2sReaderTask() {
 
   // Discard first block
   size_t bytes_read = 0;
-  err = i2s_read(I2S_PORT, samples, SAMPLES_SHORT * sizeof(int32_t), &bytes_read, 150 / portTICK_PERIOD_MS);
+  err = i2s_read(I2S_PORT, raw_samples, SAMPLES_SHORT * sizeof(int32_t), &bytes_read, 150 / portTICK_PERIOD_MS);
   if (err != ESP_OK) {
     log_e("First I2S read failed: %d", err);
     vTaskDelete(NULL);
@@ -223,28 +215,41 @@ void Microphone::i2sReaderTask() {
 
   uint32_t sample_count = 0;
   while (true) {
-    err = i2s_read(I2S_PORT, samples, SAMPLES_SHORT * sizeof(int32_t), &bytes_read, 150 / portTICK_PERIOD_MS);
+    err = i2s_read(I2S_PORT, raw_samples, SAMPLES_SHORT * sizeof(int32_t), &bytes_read, 150 / portTICK_PERIOD_MS);
     if (err != ESP_OK) {
       log_e("I2S read failed: %d", err);
       continue;
     }
 
-    // Convert samples to float
-    SAMPLE_T *int_samples = (SAMPLE_T *)samples;
+    // Convert raw int32 samples to float (separate buffers avoid a
+    // strict-aliasing violation from reinterpreting samples[] in place)
     for (int i = 0; i < SAMPLES_SHORT; i++) {
-      samples[i] = MIC_CONVERT(int_samples[i]);
+      samples[i] = MIC_CONVERT(raw_samples[i]);
     }
-    
+
     AudioSample q;
     q.sum_sqr_SPL = 0;
     for (int i = 0; i < SAMPLES_SHORT; i++) {
       q.sum_sqr_SPL += samples[i] * samples[i];
     }
-    
-    q.sum_sqr_weighted = q.sum_sqr_SPL;
+
+    {
+      static unsigned long last_overload_log = 0;
+      double raw_dB = rmsToDb(sqrt(q.sum_sqr_SPL / SAMPLES_SHORT));
+      unsigned long now = millis();
+      if (raw_dB >= MIC_OVERLOAD_DB && now - last_overload_log > 1000) {
+        log_w("[MIC] Overload/clipping detected: %.1f dB (limit %.1f dB)", raw_dB, (double)MIC_OVERLOAD_DB);
+        last_overload_log = now;
+      }
+    }
+
+    // Equalize for the INMP441's frequency response, then apply A-weighting
+    // to approximate human loudness perception before computing the level.
+    equalizer_.filter(samples, samples, SAMPLES_SHORT);
+    q.sum_sqr_weighted = aweight_.filter(samples, samples, SAMPLES_SHORT);
     q.proc_ticks = 0;
 
-    xQueueSend(samples_queue, &q, portMAX_DELAY);
+    xQueueOverwrite(samples_queue, &q);
     
     if (++sample_count % 400 == 0) {
       log_d("I2S: %u blocks read", sample_count);
