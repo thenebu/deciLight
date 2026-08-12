@@ -3,6 +3,12 @@
 #include <Preferences.h>
 #include <WiFi.h>
 
+// std::clamp isn't available in the ESP32 Arduino toolchain's libstdc++.
+template <typename T>
+static T clampValue(T val, T lo, T hi) {
+  return val < lo ? lo : (val > hi ? hi : val);
+}
+
 // Global instance
 WebService web_service;
 
@@ -199,10 +205,13 @@ void WebService::handleApiSet() {
   // (which allocates) for the whole request.
   Config new_config = getConfigSnapshot();
 
-  // Simple JSON parsing
+  // Simple JSON parsing. Parsed values are clamped to the same ranges the
+  // web UI's sliders allow, so a malformed/malicious request body can't
+  // push the config into a nonsensical or overflowing state.
   int mode_pos = body.indexOf("\"display_mode\":");
   if (mode_pos >= 0) {
-    new_config.display_mode = body.substring(mode_pos + 15, mode_pos + 16).toInt();
+    int mode = body.substring(mode_pos + 15, mode_pos + 16).toInt();
+    new_config.display_mode = clampValue(mode, 0, 1);
   }
 
   int floor_pos = body.indexOf("\"db_floor\":");
@@ -210,7 +219,7 @@ void WebService::handleApiSet() {
     int end = body.indexOf(",", floor_pos);
     if (end < 0) end = body.indexOf("}", floor_pos);
     String val = body.substring(floor_pos + 11, end);
-    new_config.db_floor = val.toFloat();
+    new_config.db_floor = clampValue(val.toFloat(), 0.0f, 120.0f);
     log_i("Parsed floor: '%s' = %.1f", val.c_str(), new_config.db_floor);
   }
 
@@ -220,7 +229,7 @@ void WebService::handleApiSet() {
     if (end < 0) end = body.indexOf("}", green_pos);
     String val = body.substring(green_pos + 23, end);
     val.trim();
-    new_config.db_normal_switchover = val.toFloat();
+    new_config.db_normal_switchover = clampValue(val.toFloat(), 0.0f, 120.0f);
     log_i("Parsed normal: '%s' = %.1f", val.c_str(), new_config.db_normal_switchover);
   }
 
@@ -230,7 +239,7 @@ void WebService::handleApiSet() {
     if (end < 0) end = body.indexOf("}", yellow_pos);
     String val = body.substring(yellow_pos + 24, end);
     val.trim();
-    new_config.db_warning_switchover = val.toFloat();
+    new_config.db_warning_switchover = clampValue(val.toFloat(), 0.0f, 120.0f);
     log_i("Parsed warning: '%s' = %.1f", val.c_str(), new_config.db_warning_switchover);
   }
 
@@ -239,7 +248,9 @@ void WebService::handleApiSet() {
     int end = body.indexOf(",", bright_pos);
     if (end < 0) end = body.indexOf("}", bright_pos);
     String val = body.substring(bright_pos + 17, end);
-    new_config.led_brightness = val.toInt();
+    // Clamp before narrowing to uint8_t - assigning a negative/out-of-range
+    // int directly would silently wrap instead of clamping.
+    new_config.led_brightness = clampValue((int)val.toInt(), 0, 255);
   }
 
   int col_green_pos = body.indexOf("\"color_normal\":");
@@ -250,7 +261,7 @@ void WebService::handleApiSet() {
     String val = body.substring(start, end);
     val.trim();
     uint32_t parsed = strtoul(val.c_str(), NULL, 10);
-    if (parsed > 0) new_config.color_normal = parsed;
+    if (parsed > 0) new_config.color_normal = clampValue(parsed, 0u, 0xFFFFFFu);
   }
 
   int col_yellow_pos = body.indexOf("\"color_warning\":");
@@ -261,7 +272,7 @@ void WebService::handleApiSet() {
     String val = body.substring(start, end);
     val.trim();
     uint32_t parsed = strtoul(val.c_str(), NULL, 10);
-    if (parsed > 0) new_config.color_warning = parsed;
+    if (parsed > 0) new_config.color_warning = clampValue(parsed, 0u, 0xFFFFFFu);
   }
 
   int col_red_pos = body.indexOf("\"color_alert\":");
@@ -272,7 +283,7 @@ void WebService::handleApiSet() {
     String val = body.substring(start, end);
     val.trim();
     uint32_t parsed = strtoul(val.c_str(), NULL, 10);
-    if (parsed > 0) new_config.color_alert = parsed;
+    if (parsed > 0) new_config.color_alert = clampValue(parsed, 0u, 0xFFFFFFu);
   }
 
   int decay_pos = body.indexOf("\"decay_ms\":");
@@ -280,7 +291,7 @@ void WebService::handleApiSet() {
     int end = body.indexOf(",", decay_pos);
     if (end < 0) end = body.indexOf("}", decay_pos);
     String val = body.substring(decay_pos + 11, end);
-    new_config.decay_ms = val.toInt();
+    new_config.decay_ms = clampValue((int)val.toInt(), 0, 3000);
   }
 
   int response_pos = body.indexOf("\"response_ms\":");
@@ -288,7 +299,7 @@ void WebService::handleApiSet() {
     int end = body.indexOf(",", response_pos);
     if (end < 0) end = body.indexOf("}", response_pos);
     String val = body.substring(response_pos + 14, end);
-    new_config.response_ms = val.toInt();
+    new_config.response_ms = clampValue((int)val.toInt(), 0, 500);
   }
 
   portENTER_CRITICAL(&config_mux);
