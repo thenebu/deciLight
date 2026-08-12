@@ -76,6 +76,10 @@ void WebService::init() {
   server->on("/api/network", HTTP_POST, [this]() { this->handleNetworkSet(); });
   log_i("[WEB] Route /api/network registered");
 
+  server->on("/api/config/export", HTTP_GET, [this]() { this->handleConfigExport(); });
+  server->on("/api/config/import", HTTP_POST, [this]() { this->handleConfigImport(); });
+  log_i("[WEB] Route /api/config/export, /api/config/import registered");
+
   server->onNotFound([this]() { this->handleNotFound(); });
   log_i("[WEB] 404 handler registered");
   
@@ -347,6 +351,83 @@ void WebService::handleNetworkSet() {
   // the client shouldn't have to wait that long for an HTTP response.
   server->send(200, "application/json", "{\"status\":\"ok\"}");
   network_service.applySettings(s);
+}
+
+// GET /api/config/export - dumps both `config` and `network` (WiFi/MQTT
+// settings, including credentials in cleartext) as one JSON object, for a
+// client-side download/backup. Security note: this is consistent with the
+// device's existing security posture (open AP, no auth on any endpoint) -
+// anyone who can reach the web UI can already read/change these values one
+// field at a time via /api/config and /api/network. Documented, not
+// blocking, per the plan.
+void WebService::handleConfigExport() {
+  Config cfg = getConfigSnapshot();
+  NetworkSettings net = network_service.getSettings();
+
+  DynamicJsonDocument doc(1024);
+  JsonObject config_obj = doc.createNestedObject("config");
+  configToJson(cfg, config_obj);
+
+  JsonObject network_obj = doc.createNestedObject("network");
+  network_obj["wifi_ssid"] = net.wifi_ssid;
+  network_obj["wifi_pass"] = net.wifi_pass;
+  network_obj["mqtt_host"] = net.mqtt_host;
+  network_obj["mqtt_port"] = net.mqtt_port;
+  network_obj["mqtt_user"] = net.mqtt_user;
+  network_obj["mqtt_pass"] = net.mqtt_pass;
+
+  String json;
+  serializeJson(doc, json);
+  server->sendHeader("Content-Disposition", "attachment; filename=\"noiselight-config.json\"");
+  server->send(200, "application/json", json);
+}
+
+// POST /api/config/import - accepts the same shape handleConfigExport()
+// produces. Reuses applyJsonToConfig()'s clamping for the `config` half
+// (same validation as handleApiSet()) and NetworkSettings' own field
+// merge for the `network` half - both sections are optional, so a
+// config-only or network-only file also imports fine.
+void WebService::handleConfigImport() {
+  log_i("[WEB] Config import received");
+  if (!server->hasArg("plain")) {
+    server->send(400, "application/json", "{\"error\":\"No body\"}");
+    return;
+  }
+
+  DynamicJsonDocument doc(1024);
+  DeserializationError err = deserializeJson(doc, server->arg("plain"));
+  if (err) {
+    server->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+    return;
+  }
+
+  if (doc["config"].is<JsonObjectConst>()) {
+    Config new_config = getConfigSnapshot();
+    applyJsonToConfig(doc["config"].as<JsonObjectConst>(), new_config);
+
+    portENTER_CRITICAL(&config_mux);
+    config = new_config;
+    portEXIT_CRITICAL(&config_mux);
+    needs_save = true;
+  }
+
+  if (doc["network"].is<JsonObjectConst>()) {
+    JsonObjectConst net_obj = doc["network"].as<JsonObjectConst>();
+    NetworkSettings s = network_service.getSettings();
+
+    if (net_obj["wifi_ssid"].is<const char*>()) s.wifi_ssid = net_obj["wifi_ssid"].as<const char*>();
+    if (net_obj["wifi_pass"].is<const char*>()) s.wifi_pass = net_obj["wifi_pass"].as<const char*>();
+    if (net_obj["mqtt_host"].is<const char*>()) s.mqtt_host = net_obj["mqtt_host"].as<const char*>();
+    if (net_obj["mqtt_port"].is<uint16_t>()) s.mqtt_port = net_obj["mqtt_port"].as<uint16_t>();
+    if (net_obj["mqtt_user"].is<const char*>()) s.mqtt_user = net_obj["mqtt_user"].as<const char*>();
+    if (net_obj["mqtt_pass"].is<const char*>()) s.mqtt_pass = net_obj["mqtt_pass"].as<const char*>();
+
+    server->send(200, "application/json", "{\"status\":\"ok\"}");
+    network_service.applySettings(s);  // may reconnect WiFi - see handleNetworkSet()
+    return;
+  }
+
+  server->send(200, "application/json", "{\"status\":\"ok\"}");
 }
 
 void WebService::handleNotFound() {
@@ -740,6 +821,19 @@ const char* html_ui = R"rawliteral(
 
       <button onclick="saveMqtt()">MQTT speichern</button>
     </div>
+
+    <div class="section" style="margin-top: 25px;">
+      <div class="section-title">Konfiguration</div>
+      <div style="font-size: 12px; color: #999; margin-bottom: 10px;">
+        Export enthält WLAN-/MQTT-Passwörter im Klartext - Datei entsprechend behandeln.
+      </div>
+      <div style="display:flex; gap:10px;">
+        <button style="margin-top:0;" onclick="exportConfig()">Export</button>
+        <button style="margin-top:0;" onclick="document.getElementById('import-file').click()">Import</button>
+      </div>
+      <input type="file" id="import-file" accept="application/json" style="display:none;" onchange="importConfig(event)">
+      <div id="config-io-status" class="status" style="display:none;"></div>
+    </div>
   </div>
 
   <script>
@@ -936,6 +1030,55 @@ const char* html_ui = R"rawliteral(
         setTimeout(() => { status.style.display = 'none'; loadNetwork(); }, 4000);
       } catch (e) {
         console.error('MQTT save failed:', e);
+      }
+    }
+
+    async function exportConfig() {
+      try {
+        const res = await fetch('/api/config/export');
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'noiselight-config.json';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        console.error('Export failed:', e);
+      }
+    }
+
+    async function importConfig(event) {
+      const file = event.target.files[0];
+      event.target.value = '';  // allow re-selecting the same file later
+      if (!file) return;
+
+      const status = document.getElementById('config-io-status');
+      try {
+        const text = await file.text();
+        const res = await fetch('/api/config/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: text
+        });
+
+        if (res.ok) {
+          status.className = 'status success';
+          status.textContent = '✓ Importiert - Seite lädt neu...';
+          status.style.display = 'block';
+          setTimeout(() => location.reload(), 2000);
+        } else {
+          status.className = 'status';
+          status.textContent = '✗ Import fehlgeschlagen (ungültige Datei?)';
+          status.style.display = 'block';
+        }
+      } catch (e) {
+        console.error('Import failed:', e);
+        status.className = 'status';
+        status.textContent = '✗ Import fehlgeschlagen';
+        status.style.display = 'block';
       }
     }
 

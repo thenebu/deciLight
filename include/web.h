@@ -42,6 +42,8 @@ private:
   void handleApiStatus();
   void handleNetworkGet();
   void handleNetworkSet();
+  void handleConfigExport();
+  void handleConfigImport();
   void handleNotFound();
 
   // Configuration methods
