@@ -259,6 +259,23 @@ void WebService::applyJsonToConfig(JsonObjectConst obj, Config& cfg) {
     cfg.response_ms = constrain(obj["response_ms"].as<int>(), 0, 500);
 }
 
+// Shared field-merge for NetworkSettings, used by both handleNetworkSet()
+// (incremental UI save - allow_empty_password=false, so a blank password
+// field means "keep what's stored") and handleConfigImport()
+// (allow_empty_password=true, so a re-imported export applies exactly what
+// it contains, including a deliberately empty password).
+void WebService::applyJsonToNetworkSettings(JsonObjectConst obj, NetworkSettings& s, bool allow_empty_password) {
+  if (obj["wifi_ssid"].is<const char*>()) s.wifi_ssid = obj["wifi_ssid"].as<const char*>();
+  if (obj["wifi_pass"].is<const char*>() && (allow_empty_password || strlen(obj["wifi_pass"]) > 0))
+    s.wifi_pass = obj["wifi_pass"].as<const char*>();
+
+  if (obj["mqtt_host"].is<const char*>()) s.mqtt_host = obj["mqtt_host"].as<const char*>();
+  if (obj["mqtt_port"].is<uint16_t>()) s.mqtt_port = obj["mqtt_port"].as<uint16_t>();
+  if (obj["mqtt_user"].is<const char*>()) s.mqtt_user = obj["mqtt_user"].as<const char*>();
+  if (obj["mqtt_pass"].is<const char*>() && (allow_empty_password || strlen(obj["mqtt_pass"]) > 0))
+    s.mqtt_pass = obj["mqtt_pass"].as<const char*>();
+}
+
 void WebService::handleApiGet() {
   DynamicJsonDocument doc(384);
   configToJson(config, doc.to<JsonObject>());
@@ -389,16 +406,7 @@ void WebService::handleNetworkSet() {
   // Start from the currently stored settings so omitted/blank password
   // fields don't clobber a previously saved credential.
   NetworkSettings s = network_service.getSettings();
-
-  if (doc["wifi_ssid"].is<const char*>()) s.wifi_ssid = doc["wifi_ssid"].as<const char*>();
-  if (doc["wifi_pass"].is<const char*>() && strlen(doc["wifi_pass"]) > 0)
-    s.wifi_pass = doc["wifi_pass"].as<const char*>();
-
-  if (doc["mqtt_host"].is<const char*>()) s.mqtt_host = doc["mqtt_host"].as<const char*>();
-  if (doc["mqtt_port"].is<uint16_t>()) s.mqtt_port = doc["mqtt_port"].as<uint16_t>();
-  if (doc["mqtt_user"].is<const char*>()) s.mqtt_user = doc["mqtt_user"].as<const char*>();
-  if (doc["mqtt_pass"].is<const char*>() && strlen(doc["mqtt_pass"]) > 0)
-    s.mqtt_pass = doc["mqtt_pass"].as<const char*>();
+  applyJsonToNetworkSettings(doc.as<JsonObjectConst>(), s, /*allow_empty_password=*/false);
 
   // Respond before reconnecting - applySettings() blocks for up to
   // WIFI_CONNECT_TIMEOUT_MS while it retries the (possibly new) SSID, and
@@ -468,13 +476,9 @@ void WebService::handleConfigImport() {
   if (doc["network"].is<JsonObjectConst>()) {
     JsonObjectConst net_obj = doc["network"].as<JsonObjectConst>();
     NetworkSettings s = network_service.getSettings();
-
-    if (net_obj["wifi_ssid"].is<const char*>()) s.wifi_ssid = net_obj["wifi_ssid"].as<const char*>();
-    if (net_obj["wifi_pass"].is<const char*>()) s.wifi_pass = net_obj["wifi_pass"].as<const char*>();
-    if (net_obj["mqtt_host"].is<const char*>()) s.mqtt_host = net_obj["mqtt_host"].as<const char*>();
-    if (net_obj["mqtt_port"].is<uint16_t>()) s.mqtt_port = net_obj["mqtt_port"].as<uint16_t>();
-    if (net_obj["mqtt_user"].is<const char*>()) s.mqtt_user = net_obj["mqtt_user"].as<const char*>();
-    if (net_obj["mqtt_pass"].is<const char*>()) s.mqtt_pass = net_obj["mqtt_pass"].as<const char*>();
+    // Import applies fields as exported, including an intentionally empty
+    // password, unlike the UI's incremental save.
+    applyJsonToNetworkSettings(net_obj, s, /*allow_empty_password=*/true);
 
     server->send(200, "application/json", "{\"status\":\"ok\"}");
     network_service.applySettings(s);  // may reconnect WiFi - see handleNetworkSet()

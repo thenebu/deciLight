@@ -4,6 +4,7 @@
 #include <WebServer.h>
 #include <freertos/FreeRTOS.h>
 #include <ArduinoJson.h>
+#include "network.h"
 
 // Ring buffer size for the history graph: 300 entries @ 1 sample/sec = 5
 // minutes of history.
@@ -64,6 +65,14 @@ private:
   // (in a later phase) the export/import endpoints.
   static void configToJson(const Config& cfg, JsonObject obj);
   static void applyJsonToConfig(JsonObjectConst obj, Config& cfg);
+
+  // Shared by handleNetworkSet() and handleConfigImport() - previously
+  // duplicated inline in both, and had drifted (one guarded empty password
+  // fields, the other didn't). allow_empty_password controls that: false
+  // for the UI's incremental save (blank field = "keep existing"), true
+  // for import (an exported file's fields, including an intentionally
+  // empty password, should be applied as-is).
+  static void applyJsonToNetworkSettings(JsonObjectConst obj, NetworkSettings& s, bool allow_empty_password);
 
   // Member variables
   WebServer *server;

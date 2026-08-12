@@ -74,6 +74,11 @@ constexpr double MIC_REF_AMPL = pow(10, double(MIC_SENSITIVITY) / 20) * ((1 << (
 // network can attempt an OTA flash otherwise. ArduinoOTA only enables once
 // WiFi STA is connected (see NetworkService::init()), so the AP-fallback
 // path never exposes this.
+//
+// If you change it, also update the matching --auth= value in
+// platformio.ini's esp32-s3-devkitc1-n4r2-ota env - PlatformIO can't read
+// this #define, so the two are independent literals with no build-time
+// check keeping them in sync.
 #define OTA_PASSWORD "changeme-ota"
 
 #endif // CONFIG_H

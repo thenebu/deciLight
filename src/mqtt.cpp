@@ -22,6 +22,13 @@ void MqttService::init() {
   // Discovery payloads (with the shared device block) run a few hundred
   // bytes past PubSubClient's 128-byte default buffer.
   client.setBufferSize(1024);
+
+  // PubSubClient's default socket timeout (15s) means a single failed
+  // connect() to an unreachable/misconfigured broker would stall this
+  // service's shared web task for that long (see the "NOT fully
+  // non-blocking" note in mqtt.h) - shorten it so a bad broker config
+  // degrades HTTP/OTA responsiveness far less.
+  client.setSocketTimeout(MQTT_SOCKET_TIMEOUT_S);
 }
 
 String MqttService::deviceId() const {
