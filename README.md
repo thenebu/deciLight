@@ -158,6 +158,24 @@ Once connected to your home network, the device is also reachable via mDNS at
 **History Graph**
 - Live line chart of the last 5 minutes of dB readings (1 sample/sec), served from `/api/history`
 
+**Tagesstatistik (Daily Time Distribution)**
+- Stacked bar chart showing how much of each hour (today, 24 buckets) was spent in each
+  color state (NORMAL/WARNING/ALERT), served from `/api/hourly`
+- Auto-resets at local midnight; a **Zurücksetzen** (Reset) button also clears it manually
+  via `/api/hourly/reset`
+- Needs the device's clock to be synced via NTP first (see **UTC Offset** below) — until
+  then the chart shows a note instead of data
+- Bucketing uses the raw (non-decayed) noise classification each loop tick, the same
+  classification MQTT publishes as its "level" sensor — not the display-smoothed color,
+  which would understate quiet periods
+
+**UTC Offset**
+- The device has no timezone database, so the **Network** section has a manual **UTC-Offset**
+  field (in hours, e.g. `1` for CET, `-5` for EST) so the Tagesstatistik hour buckets line up
+  with your local wall clock instead of raw UTC
+- Requires an internet connection (NTP sync against `pool.ntp.org`/`time.nist.gov`); doesn't
+  apply while running in AP-fallback mode with no internet access
+
 ### Persistent Storage
 
 All configuration changes are automatically saved to ESP32's **NVS (Non-Volatile Storage)**:
@@ -302,4 +320,4 @@ Licensed under GNU General Public License v3.0.
 - [ ] IR remote control for threshold adjustment
 - [ ] Multiple noise zones (classroom network)
 - [ ] Adjustable color mapping
-- [ ] Sound event logging
+- [ ] Multi-day history for the Tagesstatistik view (currently single-day, resets at midnight)

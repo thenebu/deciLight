@@ -28,8 +28,16 @@ WebService::WebService()
     dB_mux(portMUX_INITIALIZER_UNLOCKED),
     history_count(0),
     history_next(0),
-    last_history_sample_ms(0)
+    last_history_sample_ms(0),
+    hourly_day(-1),
+    hourly_year(-1),
+    hourly_reset_at(0),
+    last_hourly_ms(0),
+    last_hourly_flush_ms(0),
+    hourly_dirty(false),
+    hourly_mux(portMUX_INITIALIZER_UNLOCKED)
 {
+  memset(hourly_ms, 0, sizeof(hourly_ms));
   config = {
     .display_mode = DISPLAY_MODE,
     .db_floor = DB_FLOOR,
@@ -78,6 +86,10 @@ void WebService::init() {
   server->on("/api/history", HTTP_GET, [this]() { this->handleApiHistory(); });
   log_i("[WEB] Route /api/history registered");
 
+  server->on("/api/hourly", HTTP_GET, [this]() { this->handleHourlyGet(); });
+  server->on("/api/hourly/reset", HTTP_POST, [this]() { this->handleHourlyReset(); });
+  log_i("[WEB] Route /api/hourly, /api/hourly/reset registered");
+
   server->on("/api/network", HTTP_GET, [this]() { this->handleNetworkGet(); });
   server->on("/api/network", HTTP_POST, [this]() { this->handleNetworkSet(); });
   log_i("[WEB] Route /api/network registered");
@@ -96,6 +108,10 @@ void WebService::init() {
   log_i("[WEB] Loading config from NVS...");
   loadConfig();
   log_i("[WEB] Config loaded");
+
+  log_i("[WEB] Loading hourly stats from NVS...");
+  loadHourlyStats();
+  log_i("[WEB] Hourly stats loaded");
 }
 
 //============================================
@@ -155,7 +171,27 @@ void WebService::webTaskHandler() {
       log_i("Config updated via web: decay=%dms response=%dms",
         config.decay_ms, config.response_ms);
     }
-    
+
+    // Throttled flush for the hourly-stats buckets - 288 bytes of NVS
+    // writes, so this shouldn't happen on every 50ms tick like the small
+    // Config struct does. Only actually writes when something changed
+    // (hourly_dirty) and at most once per 5 minutes.
+    {
+      unsigned long now = millis();
+      bool dirty;
+      portENTER_CRITICAL(&hourly_mux);
+      dirty = hourly_dirty;
+      portEXIT_CRITICAL(&hourly_mux);
+
+      if (dirty && (now - last_hourly_flush_ms) > (5UL * 60UL * 1000UL)) {
+        last_hourly_flush_ms = now;
+        saveHourlyStats();
+        portENTER_CRITICAL(&hourly_mux);
+        hourly_dirty = false;
+        portEXIT_CRITICAL(&hourly_mux);
+      }
+    }
+
     vTaskDelay(pdMS_TO_TICKS(50));  // Yield for 50ms
   }
 }
@@ -196,6 +232,85 @@ double WebService::getCurrentDb() {
   double snapshot = current_dB;
   portEXIT_CRITICAL(&dB_mux);
   return snapshot;
+}
+
+// Minimum epoch value treated as "NTP has synced" - anything before this
+// means the SNTP client hasn't gotten a response yet (ESP32 boots with its
+// clock at 1970-01-01). Comfortably in the past relative to when this code
+// was written, so it's a cheap, good-enough sanity check.
+#define HOURLY_STATS_MIN_VALID_EPOCH 1700000000
+
+//============================================
+// WebService::accumulateHourlyStat() - called once per main-loop tick with
+// the raw classification of the current dB reading, to build "today"'s
+// time-in-each-color-per-hour distribution.
+//============================================
+void WebService::accumulateHourlyStat(NoiseLevel level) {
+  time_t now = time(nullptr);
+  unsigned long now_ms = millis();
+
+  if (now < (time_t)HOURLY_STATS_MIN_VALID_EPOCH) {
+    // No NTP sync yet - nothing to bucket. Keep last_hourly_ms current so
+    // the untimed gap before sync isn't counted as elapsed time once it
+    // does sync.
+    portENTER_CRITICAL(&hourly_mux);
+    last_hourly_ms = now_ms;
+    portEXIT_CRITICAL(&hourly_mux);
+    return;
+  }
+
+  struct tm tmnow;
+  localtime_r(&now, &tmnow);  // already local time - configTime() baked the offset in
+
+  portENTER_CRITICAL(&hourly_mux);
+
+  if (hourly_day != tmnow.tm_yday || hourly_year != tmnow.tm_year) {
+    // First tick after sync, or the day has rolled over (midnight, or a
+    // year boundary) - start today's buckets fresh.
+    memset(hourly_ms, 0, sizeof(hourly_ms));
+    hourly_day = tmnow.tm_yday;
+    hourly_year = tmnow.tm_year;
+    hourly_reset_at = now;
+    hourly_dirty = true;
+    last_hourly_ms = now_ms;  // avoid crediting the gap since the last tick to hour 0
+  }
+
+  unsigned long elapsed = now_ms - last_hourly_ms;
+  // Clamp to avoid a huge jump after the "no time yet" gap, a long web-task
+  // stall, or a millis() wraparound - 5s is far more than one loop() tick
+  // should ever take.
+  if (elapsed > 5000) elapsed = 5000;
+
+  hourly_ms[tmnow.tm_hour][level] += elapsed;
+  hourly_dirty = true;
+  last_hourly_ms = now_ms;
+
+  portEXIT_CRITICAL(&hourly_mux);
+}
+
+// Clears today's buckets immediately (manual reset) and persists right
+// away, unlike the throttled periodic flush in webTaskHandler().
+void WebService::resetHourlyStats() {
+  time_t now = time(nullptr);
+  bool synced = now >= (time_t)HOURLY_STATS_MIN_VALID_EPOCH;
+
+  portENTER_CRITICAL(&hourly_mux);
+  memset(hourly_ms, 0, sizeof(hourly_ms));
+  hourly_reset_at = synced ? now : 0;
+  if (synced) {
+    struct tm tmnow;
+    localtime_r(&now, &tmnow);
+    hourly_day = tmnow.tm_yday;
+    hourly_year = tmnow.tm_year;
+  } else {
+    hourly_day = -1;
+    hourly_year = -1;
+  }
+  hourly_dirty = false;  // about to persist immediately below
+  portEXIT_CRITICAL(&hourly_mux);
+
+  saveHourlyStats();
+  last_hourly_flush_ms = millis();
 }
 
 //============================================
@@ -274,6 +389,9 @@ void WebService::applyJsonToNetworkSettings(JsonObjectConst obj, NetworkSettings
   if (obj["mqtt_user"].is<const char*>()) s.mqtt_user = obj["mqtt_user"].as<const char*>();
   if (obj["mqtt_pass"].is<const char*>() && (allow_empty_password || strlen(obj["mqtt_pass"]) > 0))
     s.mqtt_pass = obj["mqtt_pass"].as<const char*>();
+
+  if (obj["utc_offset_minutes"].is<int>())
+    s.utc_offset_minutes = constrain(obj["utc_offset_minutes"].as<int>(), -720, 840);
 }
 
 void WebService::handleApiGet() {
@@ -367,6 +485,44 @@ void WebService::handleApiHistory() {
   server->send(200, "application/json", json);
 }
 
+// GET /api/hourly - today's hour-of-day time distribution across the three
+// NoiseLevel colors, for the web UI's stacked-bar "Tagesstatistik" chart.
+void WebService::handleHourlyGet() {
+  static uint32_t snapshot[24][3];
+  time_t reset_at;
+  time_t now = time(nullptr);
+  bool synced = now >= (time_t)HOURLY_STATS_MIN_VALID_EPOCH;
+
+  portENTER_CRITICAL(&hourly_mux);
+  memcpy(snapshot, hourly_ms, sizeof(hourly_ms));
+  reset_at = hourly_reset_at;
+  portEXIT_CRITICAL(&hourly_mux);
+
+  // JSON is built outside the critical section - ArduinoJson allocates on
+  // the heap, which must not happen inside a portENTER_CRITICAL section.
+  DynamicJsonDocument doc(1536);
+  doc["time_synced"] = synced;
+  doc["reset_at"] = (uint32_t)reset_at;
+  JsonArray hours = doc.createNestedArray("hours");
+  for (int h = 0; h < 24; h++) {
+    JsonArray bucket = hours.createNestedArray();
+    bucket.add(snapshot[h][NORMAL]);
+    bucket.add(snapshot[h][WARNING]);
+    bucket.add(snapshot[h][ALERT]);
+  }
+
+  String json;
+  serializeJson(doc, json);
+  server->send(200, "application/json", json);
+}
+
+// POST /api/hourly/reset - manual reset button for the hourly stats.
+void WebService::handleHourlyReset() {
+  log_i("[WEB] Hourly stats reset requested");
+  resetHourlyStats();
+  server->send(200, "application/json", "{\"status\":\"ok\"}");
+}
+
 // NetworkSettings lives outside the Config spinlock (see network.h); this
 // handler only ever runs on the web task, same as NetworkService's own
 // read/write paths, so no additional locking is needed here.
@@ -383,6 +539,7 @@ void WebService::handleNetworkGet() {
   doc["mqtt_host"] = s.mqtt_host;
   doc["mqtt_port"] = s.mqtt_port;
   doc["mqtt_user"] = s.mqtt_user;
+  doc["utc_offset_minutes"] = s.utc_offset_minutes;
 
   String json;
   serializeJson(doc, json);
@@ -437,6 +594,7 @@ void WebService::handleConfigExport() {
   network_obj["mqtt_port"] = net.mqtt_port;
   network_obj["mqtt_user"] = net.mqtt_user;
   network_obj["mqtt_pass"] = net.mqtt_pass;
+  network_obj["utc_offset_minutes"] = net.utc_offset_minutes;
 
   String json;
   serializeJson(doc, json);
@@ -541,6 +699,64 @@ void WebService::saveConfig() {
     config.color_normal, config.color_warning, config.color_alert);
   log_i("Timing: decay=%dms, response=%dms",
     config.decay_ms, config.response_ms);
+}
+
+//============================================
+// HOURLY STATS PERSISTENCE
+//============================================
+
+// Loads "today"'s hourly buckets from NVS, if any were saved. If the saved
+// day/year don't match today (or time hasn't synced yet), the normal
+// day-rollover check inside accumulateHourlyStat() clears them on its first
+// tick - no special-casing needed here.
+void WebService::loadHourlyStats() {
+  Preferences prefs;
+  prefs.begin("hourstats", true);  // readonly
+
+  uint32_t loaded[24][3];
+  memset(loaded, 0, sizeof(loaded));
+  size_t got = prefs.getBytes("buckets", loaded, sizeof(loaded));
+  int day = prefs.getInt("day", -1);
+  int year = prefs.getInt("year", -1);
+  uint32_t reset_at = prefs.getUInt("reset_at", 0);
+  prefs.end();
+
+  portENTER_CRITICAL(&hourly_mux);
+  if (got == sizeof(loaded)) {
+    memcpy(hourly_ms, loaded, sizeof(hourly_ms));
+  }
+  hourly_day = day;
+  hourly_year = year;
+  hourly_reset_at = (time_t)reset_at;
+  hourly_dirty = false;
+  portEXIT_CRITICAL(&hourly_mux);
+
+  log_i("[WEB] Hourly stats loaded: day=%d year=%d reset_at=%u", day, year, reset_at);
+}
+
+// Persists "today"'s hourly buckets. Called from the throttled flush in
+// webTaskHandler() and immediately from resetHourlyStats().
+void WebService::saveHourlyStats() {
+  uint32_t snapshot[24][3];
+  int day, year;
+  uint32_t reset_at;
+
+  portENTER_CRITICAL(&hourly_mux);
+  memcpy(snapshot, hourly_ms, sizeof(hourly_ms));
+  day = hourly_day;
+  year = hourly_year;
+  reset_at = (uint32_t)hourly_reset_at;
+  portEXIT_CRITICAL(&hourly_mux);
+
+  Preferences prefs;
+  prefs.begin("hourstats", false);  // readwrite
+  prefs.putBytes("buckets", snapshot, sizeof(snapshot));
+  prefs.putInt("day", day);
+  prefs.putInt("year", year);
+  prefs.putUInt("reset_at", reset_at);
+  prefs.end();
+
+  log_i("[WEB] Hourly stats saved (day=%d year=%d)", day, year);
 }
 
 // Embedded HTML UI (kept as static const for readability)
@@ -757,7 +973,15 @@ const char* html_ui = R"rawliteral(
       <canvas id="history-canvas" width="440" height="120"
         style="width:100%; height:120px; background:#f8f9fa; border-radius:8px;"></canvas>
     </div>
-    
+
+    <div class="section">
+      <div class="section-title">Tagesstatistik <span id="hourly-since" style="text-transform:none; letter-spacing:normal; font-weight:400; color:#999;"></span></div>
+      <canvas id="hourly-canvas" width="480" height="140"
+        style="width:100%; height:140px; background:#f8f9fa; border-radius:8px;"></canvas>
+      <div id="hourly-note" style="display:none; font-size:12px; color:#999; margin-top:6px;"></div>
+      <button onclick="resetHourlyStats()" style="margin-top:8px;">Zurücksetzen</button>
+    </div>
+
     <div class="section">
       <div class="section-title">Display Mode</div>
       <div class="radio-group">
@@ -847,6 +1071,12 @@ const char* html_ui = R"rawliteral(
       <div class="range-container">
         <label>Passwort <span style="font-weight:400; color:#999;">(leer lassen, um bestehendes zu behalten)</span></label>
         <input type="password" id="wifi-pass" placeholder="········"
+          style="width:100%; padding:8px; border:1px solid #ddd; border-radius:4px;">
+      </div>
+
+      <div class="range-container">
+        <label>UTC-Offset (Stunden) <span style="font-weight:400; color:#999;">- für Tagesstatistik-Stunden</span></label>
+        <input type="number" id="utc-offset" step="0.5" min="-12" max="14" value="0"
           style="width:100%; padding:8px; border:1px solid #ddd; border-radius:4px;">
       </div>
 
@@ -955,6 +1185,75 @@ const char* html_ui = R"rawliteral(
         ctx.stroke();
       } catch (e) {
         console.error('History update failed:', e);
+      }
+    }
+
+    async function drawHourlyStats() {
+      try {
+        const res = await fetch('/api/hourly');
+        const data = await res.json();
+
+        const canvas = document.getElementById('hourly-canvas');
+        const ctx = canvas.getContext('2d');
+        const w = canvas.width, h = canvas.height;
+        ctx.clearRect(0, 0, w, h);
+
+        const note = document.getElementById('hourly-note');
+        if (!data.time_synced) {
+          note.textContent = 'Uhrzeit noch nicht synchronisiert - Statistik startet, sobald das Gerät die Zeit per NTP erhalten hat.';
+          note.style.display = 'block';
+        } else {
+          note.style.display = 'none';
+        }
+
+        const sinceEl = document.getElementById('hourly-since');
+        if (data.reset_at) {
+          sinceEl.textContent = '(seit ' + new Date(data.reset_at * 1000).toLocaleTimeString() + ')';
+        } else {
+          sinceEl.textContent = '';
+        }
+
+        if (!Array.isArray(data.hours) || data.hours.length !== 24) return;
+
+        const colorNormal = document.getElementById('color-green').value;
+        const colorWarning = document.getElementById('color-yellow').value;
+        const colorAlert = document.getElementById('color-red').value;
+
+        const barW = w / 24;
+        const msPerHour = 3600000;
+
+        data.hours.forEach((bucket, hour) => {
+          const [normalMs, warningMs, alertMs] = bucket;
+          const total = Math.min(normalMs + warningMs + alertMs, msPerHour);
+          const x = hour * barW;
+
+          let y = h;
+          const segments = [[normalMs, colorNormal], [warningMs, colorWarning], [alertMs, colorAlert]];
+          segments.forEach(([ms, color]) => {
+            const segH = (Math.min(ms, msPerHour) / msPerHour) * h;
+            ctx.fillStyle = color;
+            ctx.fillRect(x + 1, y - segH, barW - 2, segH);
+            y -= segH;
+          });
+
+          if (hour % 4 === 0) {
+            ctx.fillStyle = '#999';
+            ctx.font = '10px sans-serif';
+            ctx.fillText(hour + 'h', x + 2, h - 2);
+          }
+        });
+      } catch (e) {
+        console.error('Hourly stats update failed:', e);
+      }
+    }
+
+    async function resetHourlyStats() {
+      if (!confirm('Statistik wirklich zurücksetzen?')) return;
+      try {
+        await fetch('/api/hourly/reset', { method: 'POST' });
+        drawHourlyStats();
+      } catch (e) {
+        console.error('Hourly stats reset failed:', e);
       }
     }
 
@@ -1078,6 +1377,7 @@ const char* html_ui = R"rawliteral(
         document.getElementById('mqtt-host').value = data.mqtt_host || '';
         document.getElementById('mqtt-port').value = data.mqtt_port || 1883;
         document.getElementById('mqtt-user').value = data.mqtt_user || '';
+        document.getElementById('utc-offset').value = (data.utc_offset_minutes || 0) / 60;
       } catch (e) {
         console.error('Failed to load network settings:', e);
       }
@@ -1086,12 +1386,13 @@ const char* html_ui = R"rawliteral(
     async function saveNetwork() {
       const ssid = document.getElementById('wifi-ssid').value;
       const pass = document.getElementById('wifi-pass').value;
+      const utcOffsetMinutes = Math.round(parseFloat(document.getElementById('utc-offset').value) * 60) || 0;
 
       try {
         const res = await fetch('/api/network', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ wifi_ssid: ssid, wifi_pass: pass })
+          body: JSON.stringify({ wifi_ssid: ssid, wifi_pass: pass, utc_offset_minutes: utcOffsetMinutes })
         });
 
         const status = document.getElementById('wifi-status');
@@ -1195,6 +1496,8 @@ const char* html_ui = R"rawliteral(
       setInterval(updateLiveLevel, 200);
       updateHistory();
       setInterval(updateHistory, 5000);
+      drawHourlyStats();
+      setInterval(drawHourlyStats, 60000);
     };
   </script>
 </body>

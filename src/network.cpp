@@ -4,6 +4,7 @@
 #include <ESPmDNS.h>
 #include <Preferences.h>
 #include <ArduinoOTA.h>
+#include <time.h>
 
 // Global instance
 NetworkService network_service;
@@ -63,6 +64,12 @@ bool NetworkService::connectSta(const String& ssid, const String& pass) {
 
   if (WiFi.status() == WL_CONNECTED) {
     log_i("[NET] WiFi connected: http://%s", WiFi.localIP().toString().c_str());
+
+    // Arm NTP sync (non-blocking - ESP32's SNTP client syncs in the
+    // background). settings.utc_offset_minutes bakes the user's manual
+    // offset in, so localtime_r() elsewhere already reflects local time.
+    configTime(settings.utc_offset_minutes * 60, 0, "pool.ntp.org", "time.nist.gov");
+
     return true;
   }
 
@@ -99,6 +106,11 @@ void NetworkService::applySettings(const NetworkSettings& new_settings) {
   saveSettings();
 
   if (!wifi_changed) {
+    // An offset-only (or MQTT-only) change still needs configTime()
+    // re-armed so a UTC-offset edit takes effect immediately, without
+    // disturbing the WiFi link. Cheap and idempotent to call again even if
+    // STA isn't connected yet - it'll just apply once it is.
+    configTime(settings.utc_offset_minutes * 60, 0, "pool.ntp.org", "time.nist.gov");
     return;  // e.g. an MQTT-only save - don't bounce a working WiFi link
   }
 
@@ -127,6 +139,7 @@ void NetworkService::loadSettings() {
   settings.mqtt_port = prefs.getUShort("mqtt_port", 1883);
   settings.mqtt_user = prefs.getString("mqtt_user", "");
   settings.mqtt_pass = prefs.getString("mqtt_pass", "");
+  settings.utc_offset_minutes = prefs.getShort("utc_off_min", 0);
   prefs.end();
 
   log_i("[NET] Settings loaded (ssid=%s, mqtt_host=%s)",
@@ -143,6 +156,7 @@ void NetworkService::saveSettings() {
   prefs.putUShort("mqtt_port", settings.mqtt_port);
   prefs.putString("mqtt_user", settings.mqtt_user);
   prefs.putString("mqtt_pass", settings.mqtt_pass);
+  prefs.putShort("utc_off_min", settings.utc_offset_minutes);
   prefs.end();
 
   log_i("[NET] Settings saved");
