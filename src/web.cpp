@@ -15,12 +15,13 @@ extern const char* html_ui;
 //============================================
 // WebService Constructor
 //============================================
-WebService::WebService() 
-  : server(nullptr), 
-    current_dB(0.0), 
+WebService::WebService()
+  : server(nullptr),
+    current_dB(0.0),
     last_dB_update(0),
     needs_save(false),
-    task_handle(nullptr)
+    task_handle(nullptr),
+    config_mux(portMUX_INITIALIZER_UNLOCKED)
 {
   config = {
     .display_mode = DISPLAY_MODE,
@@ -149,6 +150,16 @@ void WebService::updateLevel(double dB_current) {
 }
 
 //============================================
+// WebService::getConfigSnapshot() - Thread-safe copy of config
+//============================================
+Config WebService::getConfigSnapshot() {
+  portENTER_CRITICAL(&config_mux);
+  Config snapshot = config;
+  portEXIT_CRITICAL(&config_mux);
+  return snapshot;
+}
+
+//============================================
 // HTTP HANDLERS
 //============================================
 
@@ -182,50 +193,55 @@ void WebService::handleApiSet() {
 
   String body = server->arg("plain");
   log_i("Received JSON: %s", body.c_str());
-  
+
+  // Parse into a local copy first, so the shared `config` is only touched
+  // once, briefly, under the lock below - not held across string parsing
+  // (which allocates) for the whole request.
+  Config new_config = getConfigSnapshot();
+
   // Simple JSON parsing
   int mode_pos = body.indexOf("\"display_mode\":");
   if (mode_pos >= 0) {
-    config.display_mode = body.substring(mode_pos + 15, mode_pos + 16).toInt();
+    new_config.display_mode = body.substring(mode_pos + 15, mode_pos + 16).toInt();
   }
-  
+
   int floor_pos = body.indexOf("\"db_floor\":");
   if (floor_pos >= 0) {
     int end = body.indexOf(",", floor_pos);
     if (end < 0) end = body.indexOf("}", floor_pos);
     String val = body.substring(floor_pos + 11, end);
-    config.db_floor = val.toFloat();
-    log_i("Parsed floor: '%s' = %.1f", val.c_str(), config.db_floor);
+    new_config.db_floor = val.toFloat();
+    log_i("Parsed floor: '%s' = %.1f", val.c_str(), new_config.db_floor);
   }
-  
+
   int green_pos = body.indexOf("\"db_normal_switchover\":");
   if (green_pos >= 0) {
     int end = body.indexOf(",", green_pos);
     if (end < 0) end = body.indexOf("}", green_pos);
     String val = body.substring(green_pos + 23, end);
     val.trim();
-    config.db_normal_switchover = val.toFloat();
-    log_i("Parsed normal: '%s' = %.1f", val.c_str(), config.db_normal_switchover);
+    new_config.db_normal_switchover = val.toFloat();
+    log_i("Parsed normal: '%s' = %.1f", val.c_str(), new_config.db_normal_switchover);
   }
-  
+
   int yellow_pos = body.indexOf("\"db_warning_switchover\":");
   if (yellow_pos >= 0) {
     int end = body.indexOf(",", yellow_pos);
     if (end < 0) end = body.indexOf("}", yellow_pos);
     String val = body.substring(yellow_pos + 24, end);
     val.trim();
-    config.db_warning_switchover = val.toFloat();
-    log_i("Parsed warning: '%s' = %.1f", val.c_str(), config.db_warning_switchover);
+    new_config.db_warning_switchover = val.toFloat();
+    log_i("Parsed warning: '%s' = %.1f", val.c_str(), new_config.db_warning_switchover);
   }
-  
+
   int bright_pos = body.indexOf("\"led_brightness\":");
   if (bright_pos >= 0) {
     int end = body.indexOf(",", bright_pos);
     if (end < 0) end = body.indexOf("}", bright_pos);
     String val = body.substring(bright_pos + 17, end);
-    config.led_brightness = val.toInt();
+    new_config.led_brightness = val.toInt();
   }
-  
+
   int col_green_pos = body.indexOf("\"color_normal\":");
   if (col_green_pos >= 0) {
     int start = col_green_pos + 15;
@@ -234,9 +250,9 @@ void WebService::handleApiSet() {
     String val = body.substring(start, end);
     val.trim();
     uint32_t parsed = strtoul(val.c_str(), NULL, 10);
-    if (parsed > 0) config.color_normal = parsed;
+    if (parsed > 0) new_config.color_normal = parsed;
   }
-  
+
   int col_yellow_pos = body.indexOf("\"color_warning\":");
   if (col_yellow_pos >= 0) {
     int start = col_yellow_pos + 16;
@@ -245,9 +261,9 @@ void WebService::handleApiSet() {
     String val = body.substring(start, end);
     val.trim();
     uint32_t parsed = strtoul(val.c_str(), NULL, 10);
-    if (parsed > 0) config.color_warning = parsed;
+    if (parsed > 0) new_config.color_warning = parsed;
   }
-  
+
   int col_red_pos = body.indexOf("\"color_alert\":");
   if (col_red_pos >= 0) {
     int start = col_red_pos + 14;
@@ -256,28 +272,32 @@ void WebService::handleApiSet() {
     String val = body.substring(start, end);
     val.trim();
     uint32_t parsed = strtoul(val.c_str(), NULL, 10);
-    if (parsed > 0) config.color_alert = parsed;
+    if (parsed > 0) new_config.color_alert = parsed;
   }
-  
+
   int decay_pos = body.indexOf("\"decay_ms\":");
   if (decay_pos >= 0) {
     int end = body.indexOf(",", decay_pos);
     if (end < 0) end = body.indexOf("}", decay_pos);
     String val = body.substring(decay_pos + 11, end);
-    config.decay_ms = val.toInt();
+    new_config.decay_ms = val.toInt();
   }
-  
+
   int response_pos = body.indexOf("\"response_ms\":");
   if (response_pos >= 0) {
     int end = body.indexOf(",", response_pos);
     if (end < 0) end = body.indexOf("}", response_pos);
     String val = body.substring(response_pos + 14, end);
-    config.response_ms = val.toInt();
+    new_config.response_ms = val.toInt();
   }
+
+  portENTER_CRITICAL(&config_mux);
+  config = new_config;
+  portEXIT_CRITICAL(&config_mux);
 
   // Send response IMMEDIATELY (don't block on NVS writes)
   server->send(200, "application/json", "{\"status\":\"ok\"}");
-  
+
   // Set flag to save later (outside of handler)
   needs_save = true;
 }
