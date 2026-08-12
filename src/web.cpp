@@ -1,5 +1,6 @@
 #include "web.h"
 #include "config.h"
+#include "network.h"
 #include <Preferences.h>
 #include <WiFi.h>
 #include <ArduinoJson.h>
@@ -50,17 +51,11 @@ void WebService::init() {
   
   // Store global pointer for task wrapper
   g_web_service = this;
-  
-  // Start WiFi in AP mode
-  WiFi.mode(WIFI_AP);
-  log_i("[WEB] WiFi mode set to AP");
-  
-  WiFi.softAP("NoiseLight", "12345678");  // SSID, Password
-  log_i("[WEB] WiFi AP configured");
-  
-  IPAddress ap_ip = WiFi.softAPIP();
-  log_i("[WEB] WiFi AP Started: http://%s", ap_ip.toString().c_str());
-  
+
+  // WiFi mode (STA with AP fallback) and mDNS are handled by
+  // NetworkService, initialized by main.cpp before this. WebService only
+  // owns the HTTP server itself.
+
   // Setup web server routes with lambda captures
   log_i("[WEB] Registering routes...");
   
@@ -75,7 +70,11 @@ void WebService::init() {
   
   server->on("/api/status", HTTP_GET, [this]() { this->handleApiStatus(); });
   log_i("[WEB] Route /api/status registered");
-  
+
+  server->on("/api/network", HTTP_GET, [this]() { this->handleNetworkGet(); });
+  server->on("/api/network", HTTP_POST, [this]() { this->handleNetworkSet(); });
+  log_i("[WEB] Route /api/network registered");
+
   server->onNotFound([this]() { this->handleNotFound(); });
   log_i("[WEB] 404 handler registered");
   
@@ -276,6 +275,63 @@ void WebService::handleApiStatus() {
   String json;
   serializeJson(doc, json);
   server->send(200, "application/json", json);
+}
+
+// NetworkSettings lives outside the Config spinlock (see network.h); this
+// handler only ever runs on the web task, same as NetworkService's own
+// read/write paths, so no additional locking is needed here.
+void WebService::handleNetworkGet() {
+  NetworkSettings s = network_service.getSettings();
+
+  DynamicJsonDocument doc(512);
+  doc["wifi_ssid"] = s.wifi_ssid;
+  // Passwords are intentionally omitted from GET responses so they aren't
+  // echoed back to the browser/DOM on every page load - the UI leaves the
+  // password field blank and handleNetworkSet() only overwrites a stored
+  // password when the field is non-empty (see below).
+  doc["wifi_connected"] = network_service.isStaConnected();
+  doc["mqtt_host"] = s.mqtt_host;
+  doc["mqtt_port"] = s.mqtt_port;
+  doc["mqtt_user"] = s.mqtt_user;
+
+  String json;
+  serializeJson(doc, json);
+  server->send(200, "application/json", json);
+}
+
+void WebService::handleNetworkSet() {
+  log_i("[WEB] Network settings update received");
+  if (!server->hasArg("plain")) {
+    server->send(400, "application/json", "{\"error\":\"No body\"}");
+    return;
+  }
+
+  DynamicJsonDocument doc(512);
+  DeserializationError err = deserializeJson(doc, server->arg("plain"));
+  if (err) {
+    server->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+    return;
+  }
+
+  // Start from the currently stored settings so omitted/blank password
+  // fields don't clobber a previously saved credential.
+  NetworkSettings s = network_service.getSettings();
+
+  if (doc["wifi_ssid"].is<const char*>()) s.wifi_ssid = doc["wifi_ssid"].as<const char*>();
+  if (doc["wifi_pass"].is<const char*>() && strlen(doc["wifi_pass"]) > 0)
+    s.wifi_pass = doc["wifi_pass"].as<const char*>();
+
+  if (doc["mqtt_host"].is<const char*>()) s.mqtt_host = doc["mqtt_host"].as<const char*>();
+  if (doc["mqtt_port"].is<uint16_t>()) s.mqtt_port = doc["mqtt_port"].as<uint16_t>();
+  if (doc["mqtt_user"].is<const char*>()) s.mqtt_user = doc["mqtt_user"].as<const char*>();
+  if (doc["mqtt_pass"].is<const char*>() && strlen(doc["mqtt_pass"]) > 0)
+    s.mqtt_pass = doc["mqtt_pass"].as<const char*>();
+
+  // Respond before reconnecting - applySettings() blocks for up to
+  // WIFI_CONNECT_TIMEOUT_MS while it retries the (possibly new) SSID, and
+  // the client shouldn't have to wait that long for an HTTP response.
+  server->send(200, "application/json", "{\"status\":\"ok\"}");
+  network_service.applySettings(s);
 }
 
 void WebService::handleNotFound() {
@@ -613,8 +669,30 @@ const char* html_ui = R"rawliteral(
     </div>
 
     <div id="status" class="status" style="display:none;"></div>
-    
+
     <button onclick="saveConfig()">Save Configuration</button>
+
+    <div class="section" style="margin-top: 25px;">
+      <div class="section-title">WLAN</div>
+
+      <div id="wifi-state" style="font-size: 13px; color: #888; margin-bottom: 10px;">--</div>
+
+      <div class="range-container">
+        <label>SSID</label>
+        <input type="text" id="wifi-ssid" placeholder="Heimnetz-Name"
+          style="width:100%; padding:8px; border:1px solid #ddd; border-radius:4px;">
+      </div>
+
+      <div class="range-container">
+        <label>Passwort <span style="font-weight:400; color:#999;">(leer lassen, um bestehendes zu behalten)</span></label>
+        <input type="password" id="wifi-pass" placeholder="········"
+          style="width:100%; padding:8px; border:1px solid #ddd; border-radius:4px;">
+      </div>
+
+      <div id="wifi-status" class="status" style="display:none;"></div>
+
+      <button onclick="saveNetwork()">WLAN speichern &amp; verbinden</button>
+    </div>
   </div>
 
   <script>
@@ -741,8 +819,49 @@ const char* html_ui = R"rawliteral(
       }
     }
 
+    async function loadNetwork() {
+      try {
+        const res = await fetch('/api/network');
+        const data = await res.json();
+        document.getElementById('wifi-ssid').value = data.wifi_ssid || '';
+        document.getElementById('wifi-state').textContent = data.wifi_connected
+          ? ('Verbunden (' + data.wifi_ssid + ')')
+          : (data.wifi_ssid ? 'Nicht verbunden - AP-Fallback aktiv' : 'Kein WLAN konfiguriert - AP-Fallback aktiv');
+      } catch (e) {
+        console.error('Failed to load network settings:', e);
+      }
+    }
+
+    async function saveNetwork() {
+      const ssid = document.getElementById('wifi-ssid').value;
+      const pass = document.getElementById('wifi-pass').value;
+
+      try {
+        const res = await fetch('/api/network', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ wifi_ssid: ssid, wifi_pass: pass })
+        });
+
+        const status = document.getElementById('wifi-status');
+        if (res.ok) {
+          status.className = 'status success';
+          status.textContent = '✓ Gespeichert - Gerät verbindet neu (kann bis zu 15s dauern)...';
+        } else {
+          status.className = 'status';
+          status.textContent = '✗ Speichern fehlgeschlagen';
+        }
+        status.style.display = 'block';
+        document.getElementById('wifi-pass').value = '';
+        setTimeout(() => { status.style.display = 'none'; loadNetwork(); }, 4000);
+      } catch (e) {
+        console.error('Network save failed:', e);
+      }
+    }
+
     window.onload = function() {
       loadConfig();
+      loadNetwork();
       updateLiveLevel();
       setInterval(updateLiveLevel, 200);
     };

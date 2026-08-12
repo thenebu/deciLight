@@ -39,6 +39,8 @@ private:
   void handleApiGet();
   void handleApiSet();
   void handleApiStatus();
+  void handleNetworkGet();
+  void handleNetworkSet();
   void handleNotFound();
 
   // Configuration methods

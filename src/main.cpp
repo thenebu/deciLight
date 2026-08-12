@@ -22,6 +22,7 @@
 #include "config.h"
 #include "led.h"
 #include "microphone.h"
+#include "network.h"
 #include "web.h"
 
 //
@@ -43,7 +44,11 @@ void setup() {
   
   // Initialize LED controller
   led_controller.init();
-  
+
+  // Initialize networking (WiFi STA with AP fallback, mDNS) before the web
+  // server so the HTTP server comes up on whichever interface is active.
+  network_service.init();
+
   // Initialize web service
   web_service.init();
   
