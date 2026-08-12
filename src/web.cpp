@@ -23,6 +23,7 @@ WebService::WebService()
     current_dB(0.0),
     last_dB_update(0),
     needs_save(false),
+    network_settings_pending(false),
     task_handle(nullptr),
     config_mux(portMUX_INITIALIZER_UNLOCKED),
     dB_mux(portMUX_INITIALIZER_UNLOCKED),
@@ -190,6 +191,17 @@ void WebService::webTaskHandler() {
         hourly_dirty = false;
         portEXIT_CRITICAL(&hourly_mux);
       }
+    }
+
+    // Apply pending network settings (deferred from handleNetworkSet()/
+    // handleConfigImport()) here, one tick after the HTTP response was
+    // sent - by now server->handleClient() has already returned control
+    // for that request and the connection has had a chance to close, so
+    // the up-to-WIFI_CONNECT_TIMEOUT_MS block in applySettings() no
+    // longer delays the browser's response.
+    if (network_settings_pending) {
+      network_settings_pending = false;
+      network_service.applySettings(pending_network_settings);
     }
 
     vTaskDelay(pdMS_TO_TICKS(50));  // Yield for 50ms
@@ -565,11 +577,14 @@ void WebService::handleNetworkSet() {
   NetworkSettings s = network_service.getSettings();
   applyJsonToNetworkSettings(doc.as<JsonObjectConst>(), s, /*allow_empty_password=*/false);
 
-  // Respond before reconnecting - applySettings() blocks for up to
-  // WIFI_CONNECT_TIMEOUT_MS while it retries the (possibly new) SSID, and
-  // the client shouldn't have to wait that long for an HTTP response.
+  // Defer the actual reconnect to webTaskHandler()'s loop - applySettings()
+  // blocks for up to WIFI_CONNECT_TIMEOUT_MS, and calling it here (even
+  // after send()) still delays the browser, since the HTTP handler
+  // function - and with it, the connection teardown - doesn't complete
+  // until this function returns.
+  pending_network_settings = s;
+  network_settings_pending = true;
   server->send(200, "application/json", "{\"status\":\"ok\"}");
-  network_service.applySettings(s);
 }
 
 // GET /api/config/export - dumps both `config` and `network` (WiFi/MQTT
@@ -638,8 +653,10 @@ void WebService::handleConfigImport() {
     // password, unlike the UI's incremental save.
     applyJsonToNetworkSettings(net_obj, s, /*allow_empty_password=*/true);
 
+    // Deferred to webTaskHandler()'s loop - see handleNetworkSet().
+    pending_network_settings = s;
+    network_settings_pending = true;
     server->send(200, "application/json", "{\"status\":\"ok\"}");
-    network_service.applySettings(s);  // may reconnect WiFi - see handleNetworkSet()
     return;
   }
 
