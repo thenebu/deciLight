@@ -180,16 +180,20 @@ NVS-stored value always wins over the `.env` default.
   color state (NORMAL/WARNING/ALERT), served from `/api/hourly`
 - Auto-resets at local midnight; a **Zurücksetzen** (Reset) button also clears it manually
   via `/api/hourly/reset`
-- Needs the device's clock to be synced via NTP first (see **UTC Offset** below) — until
+- Needs the device's clock to be synced via NTP first (see **Time Zone** below) — until
   then the chart shows a note instead of data
 - Bucketing uses the raw (non-decayed) noise classification each loop tick, the same
   classification MQTT publishes as its "level" sensor — not the display-smoothed color,
   which would understate quiet periods
 
-**UTC Offset**
-- The device has no timezone database, so the **Network** section has a manual **UTC-Offset**
-  field (in hours, e.g. `1` for CET, `-5` for EST) so the Tagesstatistik hour buckets line up
-  with your local wall clock instead of raw UTC
+**Time Zone**
+- The **Network** section has a **Zeitzone (POSIX TZ)** field, e.g.
+  `CET-1CEST,M3.5.0,M10.5.0/3` (Europe/Berlin, the default) or `EST5EDT,M3.2.0,M11.1.0`
+  (US Eastern) — passed straight to the ESP32's `configTzTime()`, so the Tagesstatistik
+  hour buckets line up with your local wall clock, DST transitions included
+- Unlike a fixed UTC offset, a POSIX TZ string encodes *when* the clock shifts (the
+  `M3.5.0,M10.5.0/3` part), so summer/winter time is handled automatically — no manual
+  adjustment twice a year
 - Requires an internet connection (NTP sync against `pool.ntp.org`/`time.nist.gov`); doesn't
   apply while running in AP-fallback mode with no internet access
 
