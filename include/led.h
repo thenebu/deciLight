@@ -21,7 +21,9 @@ private:
   void ledTaskHandler();    // Instance task handler
 
   // Display mode implementations
+  NoiseLevel getLevelForDb(double dB_current, const Config& config);
   uint32_t getColorForLevel(double dB_current, const Config& config);
+  uint32_t getColorForNoiseLevel(NoiseLevel level, const Config& config);
   void displayTrafficLight(double dB_current, const Config& config, uint32_t now);
   void displayVUMeter(double dB_current, const Config& config);
   void displayWithConfig(double dB_current, const Config& config);
@@ -29,11 +31,11 @@ private:
   // Member variables
   Adafruit_NeoPixel *strip;
   TaskHandle_t task_handle;
-  
+
   // LED state tracking
   uint32_t last_update_ms;
   uint32_t last_color;
-  unsigned long hold_until_ms;
+  NoiseLevel last_noise_level;
 };
 
 // Global instance
