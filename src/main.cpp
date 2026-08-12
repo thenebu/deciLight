@@ -48,7 +48,6 @@ void setup() {
   web_service.init();
   
   // Start RTOS tasks
-  led_controller.startTask();
   web_service.startTask();
   
   log_e("=== SYSTEM READY ===\n");

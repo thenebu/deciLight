@@ -5,15 +5,11 @@
 // Global instance
 LEDController led_controller;
 
-// Static pointer for task wrapper
-static LEDController* g_led_controller = nullptr;
-
 //============================================
 // LEDController Constructor
 //============================================
 LEDController::LEDController()
   : strip(nullptr),
-    task_handle(nullptr),
     last_update_ms(0),
     last_color(0),
     last_noise_level(NORMAL)
@@ -25,65 +21,18 @@ LEDController::LEDController()
 //============================================
 void LEDController::init() {
   log_i("LED: Init %d pixels on GPIO %d", NUM_LEDS, DATA_PIN);
-  
+
   strip = new Adafruit_NeoPixel(NUM_LEDS, DATA_PIN, NEO_GRB + NEO_KHZ800);
   strip->begin();
   strip->show();
   strip->setBrightness(LED_BRIGHTNESS);
-  
+
   // Clear all pixels
   for (int i = 0; i < NUM_LEDS; i++) {
     strip->setPixelColor(i, 0);
   }
   strip->show();
   log_i("LED: Ready");
-  
-  // Store global pointer for task wrapper
-  g_led_controller = this;
-}
-
-//============================================
-// LEDController::startTask() - Create FreeRTOS LED task
-//============================================
-void LEDController::startTask() {
-  log_i("[LED] Creating LEDTask...");
-  
-  BaseType_t ret = xTaskCreatePinnedToCore(
-    LEDController::ledTaskWrapper,  // Static wrapper function
-    "LEDTask",                      // Task name
-    4096,                           // Stack size
-    this,                           // Parameter (pass this pointer)
-    2,                              // Priority
-    &task_handle,                   // Task handle
-    1                               // Core 1
-  );
-  
-  if (ret != pdPASS) {
-    log_e("[LED] Failed to create LEDTask!");
-  } else {
-    log_i("[LED] LEDTask created successfully");
-  }
-}
-
-//============================================
-// LEDController::ledTaskWrapper() - Static task wrapper
-//============================================
-void LEDController::ledTaskWrapper(void *param) {
-  LEDController* pThis = static_cast<LEDController*>(param);
-  pThis->ledTaskHandler();
-}
-
-//============================================
-// LEDController::ledTaskHandler() - Instance task handler
-//============================================
-void LEDController::ledTaskHandler() {
-  log_i("[TASK] LEDTask started on core %d", xPortGetCoreID());
-  
-  while (1) {
-    // LED updates are now driven from main loop
-    // This task is mainly a placeholder for future async updates
-    vTaskDelay(pdMS_TO_TICKS(50));
-  }
 }
 
 //============================================
