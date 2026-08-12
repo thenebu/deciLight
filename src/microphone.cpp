@@ -233,6 +233,16 @@ void Microphone::i2sReaderTask() {
       q.sum_sqr_SPL += samples[i] * samples[i];
     }
 
+    {
+      static unsigned long last_overload_log = 0;
+      double raw_dB = rmsToDb(sqrt(q.sum_sqr_SPL / SAMPLES_SHORT));
+      unsigned long now = millis();
+      if (raw_dB >= MIC_OVERLOAD_DB && now - last_overload_log > 1000) {
+        log_w("[MIC] Overload/clipping detected: %.1f dB (limit %.1f dB)", raw_dB, (double)MIC_OVERLOAD_DB);
+        last_overload_log = now;
+      }
+    }
+
     // Equalize for the INMP441's frequency response, then apply A-weighting
     // to approximate human loudness perception before computing the level.
     equalizer_.filter(samples, samples, SAMPLES_SHORT);
