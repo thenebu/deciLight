@@ -129,7 +129,10 @@ void WebService::webTaskHandler() {
     if (server) {
       server->handleClient();
     }
-    
+
+    // Pump ArduinoOTA (no-ops until STA is connected and OTA is armed)
+    network_service.handleOta();
+
     // Check if config save is pending (deferred from HTTP handler)
     if (needs_save) {
       needs_save = false;

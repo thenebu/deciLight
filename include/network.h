@@ -48,12 +48,20 @@ public:
   void applySettings(const NetworkSettings& new_settings);  // Save + reconnect
   bool isStaConnected() const;
 
+  // Pumps ArduinoOTA's handler - call from the existing 50ms web task loop
+  // (WebService::webTaskHandler()), no separate task needed. Safe to call
+  // even when OTA hasn't been started (STA never connected) - no-ops then.
+  void handleOta();
+
 private:
   void loadSettings();
   void saveSettings();
   bool connectSta(const String& ssid, const String& pass);
   void startApFallback();
   void startMdns();
+  void startOta();
+
+  bool ota_started = false;
 
   NetworkSettings settings;
 };

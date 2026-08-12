@@ -1,7 +1,9 @@
 #include "network.h"
+#include "config.h"
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <Preferences.h>
+#include <ArduinoOTA.h>
 
 // Global instance
 NetworkService network_service;
@@ -23,11 +25,28 @@ void NetworkService::init() {
 
   if (sta_ok) {
     startMdns();
+    startOta();
   } else {
     startApFallback();
     // mDNS also works while in AP mode (clients on the AP's subnet can
-    // still resolve noiselight.local), so start it either way.
+    // still resolve noiselight.local), so start it either way. OTA stays
+    // off in AP mode - espota targets noiselight.local, which only
+    // resolves usefully once the device is actually on the home network.
     startMdns();
+  }
+}
+
+void NetworkService::startOta() {
+  ArduinoOTA.setHostname(MDNS_HOSTNAME);
+  ArduinoOTA.setPassword(OTA_PASSWORD);
+  ArduinoOTA.begin();
+  ota_started = true;
+  log_i("[NET] ArduinoOTA ready (hostname=%s)", MDNS_HOSTNAME);
+}
+
+void NetworkService::handleOta() {
+  if (ota_started) {
+    ArduinoOTA.handle();
   }
 }
 
@@ -87,6 +106,9 @@ void NetworkService::applySettings(const NetworkSettings& new_settings) {
     startApFallback();
   }
   startMdns();
+  if (sta_ok && !ota_started) {
+    startOta();
+  }
 }
 
 void NetworkService::loadSettings() {

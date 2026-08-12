@@ -67,4 +67,13 @@ constexpr double MIC_REF_AMPL = pow(10, double(MIC_SENSITIVITY) / 20) * ((1 << (
 #define I2S_TASK_PRI 4
 #define I2S_TASK_STACK 8192
 
+//
+// OTA UPDATES
+//
+// CHANGE THIS before deploying to your home network - anyone on the same
+// network can attempt an OTA flash otherwise. ArduinoOTA only enables once
+// WiFi STA is connected (see NetworkService::init()), so the AP-fallback
+// path never exposes this.
+#define OTA_PASSWORD "changeme-ota"
+
 #endif // CONFIG_H
