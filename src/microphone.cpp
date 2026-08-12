@@ -14,6 +14,10 @@ static Microphone* g_microphone = nullptr;
 QueueHandle_t samples_queue = nullptr;
 float samples[SAMPLES_SHORT] __attribute__((aligned(4)));
 
+// Raw I2S read buffer, kept separate from `samples` to avoid strict-aliasing
+// violations when converting int32 -> float in place.
+static int32_t raw_samples[SAMPLES_SHORT] __attribute__((aligned(4)));
+
 //
 // SOS IIR FILTER STRUCTURE
 //
@@ -213,7 +217,7 @@ void Microphone::i2sReaderTask() {
 
   // Discard first block
   size_t bytes_read = 0;
-  err = i2s_read(I2S_PORT, samples, SAMPLES_SHORT * sizeof(int32_t), &bytes_read, 150 / portTICK_PERIOD_MS);
+  err = i2s_read(I2S_PORT, raw_samples, SAMPLES_SHORT * sizeof(int32_t), &bytes_read, 150 / portTICK_PERIOD_MS);
   if (err != ESP_OK) {
     log_e("First I2S read failed: %d", err);
     vTaskDelete(NULL);
@@ -223,18 +227,18 @@ void Microphone::i2sReaderTask() {
 
   uint32_t sample_count = 0;
   while (true) {
-    err = i2s_read(I2S_PORT, samples, SAMPLES_SHORT * sizeof(int32_t), &bytes_read, 150 / portTICK_PERIOD_MS);
+    err = i2s_read(I2S_PORT, raw_samples, SAMPLES_SHORT * sizeof(int32_t), &bytes_read, 150 / portTICK_PERIOD_MS);
     if (err != ESP_OK) {
       log_e("I2S read failed: %d", err);
       continue;
     }
 
-    // Convert samples to float
-    SAMPLE_T *int_samples = (SAMPLE_T *)samples;
+    // Convert raw int32 samples to float (separate buffers avoid a
+    // strict-aliasing violation from reinterpreting samples[] in place)
     for (int i = 0; i < SAMPLES_SHORT; i++) {
-      samples[i] = MIC_CONVERT(int_samples[i]);
+      samples[i] = MIC_CONVERT(raw_samples[i]);
     }
-    
+
     AudioSample q;
     q.sum_sqr_SPL = 0;
     for (int i = 0; i < SAMPLES_SHORT; i++) {
