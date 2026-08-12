@@ -133,8 +133,8 @@ void NetworkService::applySettings(const NetworkSettings& new_settings) {
 void NetworkService::loadSettings() {
   Preferences prefs;
   prefs.begin("network", true);  // readonly
-  settings.wifi_ssid = prefs.getString("wifi_ssid", "");
-  settings.wifi_pass = prefs.getString("wifi_pass", "");
+  settings.wifi_ssid = prefs.getString("wifi_ssid", WIFI_SSID_DEFAULT);
+  settings.wifi_pass = prefs.getString("wifi_pass", WIFI_PASSWORD_DEFAULT);
   settings.mqtt_host = prefs.getString("mqtt_host", "");
   settings.mqtt_port = prefs.getUShort("mqtt_port", 1883);
   settings.mqtt_user = prefs.getString("mqtt_user", "");

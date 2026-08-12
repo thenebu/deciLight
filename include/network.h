@@ -14,6 +14,18 @@
 // WiFi STA connect timeout before falling back to AP mode.
 #define WIFI_CONNECT_TIMEOUT_MS 15000
 
+// Baked in at build time from a gitignored .env file (see .env.example and
+// load_env.py) - only used as the first-boot NVS default in
+// NetworkService::loadSettings(). Once WiFi settings are saved via the web
+// UI, the NVS-stored value always wins; this just lets a device join a
+// known network without ever needing to connect to its AP fallback.
+#ifndef WIFI_SSID_DEFAULT
+#define WIFI_SSID_DEFAULT ""
+#endif
+#ifndef WIFI_PASSWORD_DEFAULT
+#define WIFI_PASSWORD_DEFAULT ""
+#endif
+
 //
 // NetworkSettings - WiFi/MQTT credentials, kept OUT of the Config struct in
 // web.h. Config is copied under a portMUX_TYPE spinlock (see

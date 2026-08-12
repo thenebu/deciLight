@@ -111,6 +111,23 @@ its own **Access Point (AP)** so you can always reach the web UI:
 Once connected to your home network, the device is also reachable via mDNS at
 **`http://noiselight.local`**.
 
+### First-Boot WiFi via .env (optional)
+
+If your phone/laptop can't see or join the `NoiseLight` AP, or you'd rather skip that
+step entirely, copy `.env.example` to `.env` (gitignored, never committed) and fill in
+your home WiFi credentials:
+
+```bash
+cp .env.example .env
+# edit .env: WIFI_SSID=..., WIFI_PASSWORD=...
+platformio run -t upload -e esp32-s3-devkitc1-n4r2
+```
+
+`load_env.py` bakes these in as the NVS default a freshly flashed device tries on its
+very first boot — it only matters until the device's WiFi settings are saved once via
+the web UI (or already exist in NVS from a previous flash), at which point the
+NVS-stored value always wins over the `.env` default.
+
 ### Setup Instructions
 
 1. **First-time connection (AP fallback):**
