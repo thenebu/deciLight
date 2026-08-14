@@ -164,7 +164,7 @@ void MqttService::publishState() {
   const char* level_str = (level == NORMAL) ? "normal" : (level == WARNING) ? "warning" : "alert";
 
   DynamicJsonDocument doc(128);
-  doc["db"] = db;
+  doc["db"] = (int)round(db);  // whole dB is all anyone reads off the HA dashboard
   doc["level"] = level_str;
 
   String payload;
