@@ -2,6 +2,11 @@
 
 A real-time noise monitor that displays sound levels as a traffic light using RGB LEDs.
 
+> ✅ **Status:** All features below have been tested on real hardware, **except the Home
+> Assistant / MQTT discovery integration**, which is implemented but not yet verified
+> end-to-end against a live Home Assistant instance. Everything else — WiFi/AP fallback,
+> OTA, config export/import, history graph, Tagesstatistik — is confirmed working.
+
 ## 📋 Features
 
 - **Real-time noise detection** via I2S MEMS microphone
@@ -9,7 +14,7 @@ A real-time noise monitor that displays sound levels as a traffic light using RG
   - 🟢 **GREEN** – Noise is low (quieter than threshold)
   - 🟡 **YELLOW** – Noise is moderate (within range)
   - 🔴 **RED** – Noise is high (exceeded threshold)
-- **12 NeoPixel RGB LED strip** for bright, visible feedback
+- **7 NeoPixel RGB LED strip** for bright, visible feedback
 - **A-weighted sound level measurement** (dBA) for realistic perception
 - **Configurable thresholds** via persistent storage
 - **WiFi client mode** with automatic AP fallback for first-time setup
@@ -219,6 +224,11 @@ working setup or cloning it to a second unit.
 Once connected to your home network, the device can publish its noise readings to an
 MQTT broker and announce itself to **Home Assistant** via MQTT discovery — no manual
 entity configuration needed.
+
+> ⚠️ **Not yet verified against a live Home Assistant instance.** The MQTT publishing and
+> discovery payload are implemented, but end-to-end verification with a real Home
+> Assistant install is still outstanding. All other features in this README have been
+> tested on real hardware.
 
 ### Setup
 
