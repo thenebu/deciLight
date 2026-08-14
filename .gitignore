@@ -3,3 +3,7 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+
+# Arduino IDE sketch copy for manual flashing - has WiFi credentials
+# hardcoded directly (see network.h), never commit this.
+arduino_sketch/
