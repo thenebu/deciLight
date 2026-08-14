@@ -22,6 +22,8 @@
 #include "config.h"
 #include "led.h"
 #include "microphone.h"
+#include "net_manager.h"
+#include "mqtt.h"
 #include "web.h"
 
 //
@@ -40,13 +42,46 @@ void setup() {
 
   // Initialize microphone (starts I2S reader task)
   microphone.init();
-  
+
+  // Auto-baseline: sample the ambient level for a few seconds right after
+  // boot and average it into a suggested noise floor. Deliberately NOT
+  // written into config.db_floor automatically - that would silently
+  // override a saved user setting on every reboot. Instead it's exposed
+  // as `suggested_floor` on /api/status, and the web UI offers it as a
+  // one-click suggestion next to the existing "Current" button.
+  {
+    const uint32_t warmup_ms = 4000;
+    const uint32_t sample_interval_ms = 200;
+    double sum = 0.0;
+    int samples = 0;
+    uint32_t warmup_start = millis();
+    log_i("[BOOT] Sampling ambient level for baseline suggestion (%dms)...", warmup_ms);
+    while (millis() - warmup_start < warmup_ms) {
+      sum += microphone.getLevel();
+      samples++;
+      delay(sample_interval_ms);
+    }
+    if (samples > 0) {
+      double suggested = sum / samples;
+      web_service.setSuggestedFloor(suggested);
+      log_i("[BOOT] Suggested floor: %.1f dB (%d samples)", suggested, samples);
+    }
+  }
+
   // Initialize LED controller
   led_controller.init();
-  
+
+  // Initialize networking (WiFi STA with AP fallback, mDNS) before the web
+  // server so the HTTP server comes up on whichever interface is active.
+  network_service.init();
+
   // Initialize web service
   web_service.init();
-  
+
+  // Initialize MQTT (connection itself is deferred and driven from the web
+  // task loop - see WebService::webTaskHandler())
+  mqtt_service.init();
+
   // Start RTOS tasks
   web_service.startTask();
   
@@ -60,12 +95,18 @@ void setup() {
 void loop() {
   // Get audio level from microphone
   double level_dB = microphone.getLevel();
-  
+  Config config = web_service.getConfigSnapshot();
+
   // Update LED display with current level and config
-  led_controller.handleLevel(level_dB, web_service.getConfigSnapshot());
-  
+  led_controller.handleLevel(level_dB, config);
+
   // Update web interface with current level
   web_service.updateLevel(level_dB);
-  
+
+  // Track today's hour-of-day time distribution, using the same raw
+  // classification MqttService reuses for its "level" sensor - not the
+  // decayed/display level, which is a display-smoothing concern.
+  web_service.accumulateHourlyStat(led_controller.getLevelForDb(level_dB, config));
+
   yield();  // Allow FreeRTOS scheduler to run
 }
