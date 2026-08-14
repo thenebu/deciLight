@@ -124,7 +124,13 @@ void WebService::startTask() {
   BaseType_t ret = xTaskCreatePinnedToCore(
     WebService::webTaskWrapper,  // Static wrapper function
     "WebTask",                   // Task name
-    4096,                        // Stack size
+    // 4096 was enough for plain HTTP + OTA, but MQTT reconnect/discovery
+    // (PubSubClient::connect()'s TCP handshake plus JSON serialization,
+    // called synchronously from this same task in MqttService::loop())
+    // adds enough call depth to overflow it once a broker is actually
+    // configured - manifests as a boot loop (device drops off WiFi ~1s
+    // after connecting, right after MQTT settings are saved).
+    8192,                        // Stack size
     this,                        // Parameter (pass this pointer)
     3,                           // Priority
     &task_handle,                // Task handle
