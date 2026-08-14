@@ -58,9 +58,13 @@ public:
       
       // Apply cascaded SOS sections
       for (int s = 0; s < section_count_; s++) {
-        // Direct Form II: w(n) = x(n) - a1*w(n-1) - a2*w(n-2)
-        float w_n = sample - filter_->sos[s].a1 * state_[s][0] 
-                           - filter_->sos[s].a2 * state_[s][1];
+        // Direct Form II: w(n) = x(n) + a1*w(n-1) + a2*w(n-2)
+        // (matches the upstream esp32-i2s-slm reference this filter is
+        // adapted from; these SOS coefficients have poles that are only
+        // stable with addition here - subtracting flips them outside the
+        // unit circle and the filter diverges to Inf/NaN within one block)
+        float w_n = sample + filter_->sos[s].a1 * state_[s][0]
+                           + filter_->sos[s].a2 * state_[s][1];
         
         // y(n) = b1*w(n-1) + b2*w(n-2) (b0=1 incorporated above)
         sample = w_n + filter_->sos[s].b1 * state_[s][0] 

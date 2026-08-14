@@ -225,7 +225,7 @@ void Microphone::i2sReaderTask() {
       continue;
     }
 
-    if (sample_count < 3) {
+    if (sample_count < 3 || sample_count % 400 == 0) {
       log_i("raw[0..3]=%ld %ld %ld %ld", (long)raw_samples[0], (long)raw_samples[1],
             (long)raw_samples[2], (long)raw_samples[3]);
     }
@@ -257,6 +257,12 @@ void Microphone::i2sReaderTask() {
     equalizer_.filter(samples, samples, SAMPLES_SHORT);
     q.sum_sqr_weighted = aweight_.filter(samples, samples, SAMPLES_SHORT);
     q.proc_ticks = 0;
+
+    if (sample_count < 3 || sample_count % 400 == 0) {
+      log_i("sum_sqr_SPL=%g sum_sqr_weighted=%g (isnan=%d isinf=%d)",
+            q.sum_sqr_SPL, q.sum_sqr_weighted,
+            (int)isnan(q.sum_sqr_weighted), (int)isinf(q.sum_sqr_weighted));
+    }
 
     xQueueOverwrite(samples_queue, &q);
     

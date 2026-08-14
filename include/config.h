@@ -67,7 +67,7 @@ enum NoiseLevel {
 // Microphone parameters for I2S MEMS (INMP441-compatible)
 #define MIC_EQUALIZER INMP441
 #define MIC_SENSITIVITY -26     // dBFS (from microphone datasheet)
-#define MIC_REF_DB 80.0         // Reference dB value (calibrated for this setup)
+#define MIC_REF_DB 67.0         // Reference dB value (calibrated against a phone SPL meter: was 80.0, read 13dB high)
 #define MIC_OVERLOAD_DB 116.0   // Max input before clipping
 #define MIC_NOISE_DB 29         // Noise floor
 #define MIC_BITS 24             // Bits from microphone
