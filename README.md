@@ -2,10 +2,9 @@
 
 A real-time noise monitor that displays sound levels as a traffic light using RGB LEDs.
 
-> ✅ **Status:** All features below have been tested on real hardware, **except the Home
-> Assistant / MQTT discovery integration**, which is implemented but not yet verified
-> end-to-end against a live Home Assistant instance. Everything else — WiFi/AP fallback,
-> OTA, config export/import, history graph, Tagesstatistik — is confirmed working.
+> ✅ **Status:** All features below have been tested on real hardware, including the
+> Home Assistant / MQTT discovery integration — the device and its Noise Level /
+> Noise Level Status entities show up in Home Assistant automatically.
 
 ## 📋 Features
 
@@ -225,18 +224,13 @@ Once connected to your home network, the device can publish its noise readings t
 MQTT broker and announce itself to **Home Assistant** via MQTT discovery — no manual
 entity configuration needed.
 
-> ⚠️ **Not yet verified against a live Home Assistant instance.** The MQTT publishing and
-> discovery payload are implemented, but end-to-end verification with a real Home
-> Assistant install is still outstanding. All other features in this README have been
-> tested on real hardware.
-
 ### Setup
 
 1. In the web UI's **Network** section, enter your MQTT broker's host/port and,
    if required, username/password, then save.
 2. The device connects automatically and publishes a Home Assistant discovery payload
    on `homeassistant/sensor/<device-id>/...`, exposing two entities:
-   - **Noise Level** – the current dB reading
+   - **Noise Level** – the current dB reading, rounded to a whole number
    - **Noise Level Status** – `normal` / `warning` / `alert`
 3. State is published every ~2 seconds to `noiselight/<device-id>/state`, with an
    availability topic (`.../availability`) so Home Assistant marks the device offline
