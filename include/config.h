@@ -2,6 +2,22 @@
 #define CONFIG_H
 
 #include <cmath>
+#include <Arduino.h>
+
+// On native-USB-CDC boards (no USB-UART bridge chip, e.g. the ESP32-S3-Zero),
+// the stock log_e/log_i/log_w/log_d macros route through ets_printf to UART0
+// (physically unconnected here), NOT to the Serial/USB-CDC console - so they
+// never show up in a USB serial monitor regardless of Core Debug Level.
+// Redefine them to go straight to Serial, which does reach the USB-CDC host.
+#undef log_e
+#undef log_w
+#undef log_i
+#undef log_d
+#define DBG_LOG(L, fmt, ...) Serial.printf("[" L "][%s:%d] " fmt "\r\n", __FILE__, __LINE__, ##__VA_ARGS__)
+#define log_e(fmt, ...) DBG_LOG("E", fmt, ##__VA_ARGS__)
+#define log_w(fmt, ...) DBG_LOG("W", fmt, ##__VA_ARGS__)
+#define log_i(fmt, ...) DBG_LOG("I", fmt, ##__VA_ARGS__)
+#define log_d(fmt, ...) DBG_LOG("D", fmt, ##__VA_ARGS__)
 
 //
 // NOISE LEVEL ENUM
@@ -15,17 +31,17 @@ enum NoiseLevel {
 //
 // PIN CONFIGURATION - ESP32 Noise Light
 //
-#define DATA_PIN 2              // WS2812 LED strip (12 LEDs)
-#define I2S_LR 4                // I2S L/R Select - GREEN wire (set HIGH=RIGHT channel)
-#define I2S_WS 5                // I2S Word Select (L/R Clock) - BLUE wire
-#define I2S_SCK 6               // I2S Serial Clock (BCLK) - WHITE wire
-#define I2S_SD 7                // I2S Serial Data - YELLOW wire
+#define DATA_PIN 1               // WS2812 LED strip (7 LEDs)
+#define I2S_LR 3                // I2S L/R Select - GREEN wire (set HIGH=RIGHT channel)
+#define I2S_WS 4                // I2S Word Select (L/R Clock) - BLUE wire
+#define I2S_SCK 5                // I2S Serial Clock (BCLK) - WHITE wire
+#define I2S_SD 2                // I2S Serial Data - YELLOW wire
 #define I2S_PORT I2S_NUM_0      // Use I2S peripheral 0
 
 //
 // LED CONFIGURATION
 //
-#define NUM_LEDS 13             // 12 WS2812 pixels
+#define NUM_LEDS 7               // 7 WS2812 pixels
 #define LED_BRIGHTNESS 25       // 0-255
 #define DISPLAY_MODE 1          // 0=TRAFFIC_LIGHT, 1=VU_METER
 
@@ -45,8 +61,8 @@ enum NoiseLevel {
 // Each I2S block is used directly as the measurement window (no separate
 // LEQ accumulation across blocks).
 #define SAMPLES_SHORT (SAMPLE_RATE / 8)  // ~125ms blocks
-#define DMA_BANK_SIZE (SAMPLES_SHORT / 16)
-#define DMA_BANKS 32
+#define DMA_BANK_SIZE 256       // ~24 KB total DMA RAM instead of ~96 KB
+#define DMA_BANKS 12
 
 // Microphone parameters for I2S MEMS (INMP441-compatible)
 #define MIC_EQUALIZER INMP441

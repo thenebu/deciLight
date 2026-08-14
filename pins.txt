@@ -5,18 +5,18 @@ pins.txt
 
 ## RGB LED STRIP (WS2812 NeoPixel)
 # ─────────────────────────────────
-LED_DATA = GPIO 2  # NeoPixel Data In (13x WS2812)
-LED_COUNT = 13     # Number of LEDs
+LED_DATA = GPIO 1  # NeoPixel Data In (7x WS2812)
+LED_COUNT = 7      # Number of LEDs
 
 
 ## I2S MICROPHONE (INMP441 or compatible)
 # ────────────────────────────────────────
-MIC_LR  = GPIO 4   # L/R Select (Channel Select) - GREEN wire (HIGH=RIGHT)
-MIC_WS  = GPIO 5   # Word Select (L/R Clock) - BLUE wire
-MIC_SCK = GPIO 6   # Serial Clock (BCLK) - WHITE wire
-MIC_SD  = GPIO 7   # Serial Data (SDO) - YELLOW wire
+MIC_LR  = GPIO 3   # L/R Select (Channel Select) - GREEN wire (HIGH=RIGHT)
+MIC_WS  = GPIO 4   # Word Select (L/R Clock) - BLUE wire
+MIC_SCK = GPIO 5   # Serial Clock (BCLK) - WHITE wire
+MIC_SD  = GPIO 2   # Serial Data (SDO) - YELLOW wire
 
 ## REFERENCE (deciLight Original Pins - for comparison)
 # ──────────────────────────────────────────────────────
 # deciLight used: WS=15, SCK=14, SD=32, LED=2
-# Our hardware: LR=4, WS=5, SCK=6, SD=7, LED=2
+# Our hardware: LR=3, WS=4, SCK=5, SD=2, LED=1

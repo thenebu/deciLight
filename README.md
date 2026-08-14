@@ -24,11 +24,11 @@ A real-time noise monitor that displays sound levels as a traffic light using RG
 
 | Component | Pin | Color | Description |
 |-----------|-----|-------|-------------|
-| **WS2812 LED Data** | GPIO 2 | - | NeoPixel strip (12 LEDs) |
-| **I2S L/R Select** | GPIO 4 | Green | Microphone channel select (set HIGH = RIGHT channel) |
-| **I2S Word Select** | GPIO 5 | Blue | Microphone L/R clock |
-| **I2S Serial Clock** | GPIO 6 | White | Microphone bit clock |
-| **I2S Serial Data** | GPIO 7 | Yellow | Microphone audio data |
+| **WS2812 LED Data** | GPIO 1 | - | NeoPixel strip (7 LEDs) |
+| **I2S L/R Select** | GPIO 3 | Green | Microphone channel select (set HIGH = RIGHT channel) |
+| **I2S Word Select** | GPIO 4 | Blue | Microphone L/R clock |
+| **I2S Serial Clock** | GPIO 5 | White | Microphone bit clock |
+| **I2S Serial Data** | GPIO 2 | Yellow | Microphone audio data |
 | **Power (5V)** | 5V | - | USB power supply |
 | **GND** | GND | - | Ground |
 
@@ -37,10 +37,10 @@ A real-time noise monitor that displays sound levels as a traffic light using RG
 ```
 ESP32                          I2S Microphone (e.g., INMP441)
 ───────                        ──────────────────
-GPIO 4 (green, HIGH)───────────→ L/R (channel select = RIGHT)
-GPIO 5 (blue) ─────────────────→ WS (L/R Clock)
-GPIO 6 (white) ─────────────────→ SCK (Bit Clock)
-GPIO 7 (yellow)─────────────────→ SD (Serial Data)
+GPIO 3 (green, HIGH)───────────→ L/R (channel select = RIGHT)
+GPIO 4 (blue) ─────────────────→ WS (L/R Clock)
+GPIO 5 (white) ─────────────────→ SCK (Bit Clock)
+GPIO 2 (yellow)─────────────────→ SD (Serial Data)
 GND ───────────────────────────→ GND
 3V3 ───────────────────────────→ VDD (if 3.3V version)
 ```
@@ -48,7 +48,7 @@ GND ─────────────────────────�
 ```
 ESP32                          NeoPixel Strip (WS2812)
 ───────                        ──────────────────
-GPIO 2 ────────────────────────→ DI (Data In)
+GPIO 1 ────────────────────────→ DI (Data In)
 5V ────────────────────────────→ 5V
 GND ───────────────────────────→ GND
 ```
@@ -313,10 +313,10 @@ If readings are consistently off:
 
 | Issue | Cause | Solution |
 |-------|-------|----------|
-| Always GREEN | Microphone not connected | Check I2S pins (GPIO 4,6,7) |
+| Always GREEN | Microphone not connected | Check I2S pins (GPIO 3,5,2) |
 | Always RED | Calibration off | Adjust MIC_OFFSET_DB |
 | No serial output | Wrong baud rate | Set to 115200 |
-| No LED response | Wrong LED pin | Verify GPIO 2 connection |
+| No LED response | Wrong LED pin | Verify GPIO 1 connection |
 | Microphone noise floor high | Electrical noise | Shield data lines, check power supply |
 | Device stuck on `NoiseLight` AP | Home WiFi unreachable/wrong password | Check credentials in the web UI, or reconnect to the AP and re-enter them |
 | MQTT entities not appearing in Home Assistant | Broker unreachable or discovery not yet sent | Verify host/port/credentials in Network settings; discovery re-sends on every reconnect |

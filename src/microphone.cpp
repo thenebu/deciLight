@@ -163,7 +163,7 @@ esp_err_t Microphone::i2sInit() {
     .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
     .dma_buf_count = DMA_BANKS,
     .dma_buf_len = DMA_BANK_SIZE,
-    .use_apll = true,
+    .use_apll = false,          // ESP32-S3 has no APLL for I2S; silently ignored if true
     .tx_desc_auto_clear = false,
     .fixed_mclk = 0
   };
@@ -205,9 +205,13 @@ void Microphone::i2sReaderTask() {
 
   // Discard first block
   size_t bytes_read = 0;
-  err = i2s_read(I2S_PORT, raw_samples, SAMPLES_SHORT * sizeof(int32_t), &bytes_read, 150 / portTICK_PERIOD_MS);
-  if (err != ESP_OK) {
-    log_e("First I2S read failed: %d", err);
+  const size_t bytes_wanted = SAMPLES_SHORT * sizeof(int32_t);
+  err = i2s_read(I2S_PORT, raw_samples, bytes_wanted, &bytes_read, 500 / portTICK_PERIOD_MS);
+  if (err != ESP_OK || bytes_read == 0) {
+    // i2s_read() returns ESP_OK even on timeout, just with bytes_read < wanted -
+    // must check bytes_read explicitly or a silent/dead mic reads as ESP_OK
+    // forever and getLevel() never sees anything but the constructor default.
+    log_e("First I2S read failed: err=%d bytes_read=%u/%u", err, (unsigned)bytes_read, (unsigned)bytes_wanted);
     vTaskDelete(NULL);
     return;
   }
@@ -215,10 +219,15 @@ void Microphone::i2sReaderTask() {
 
   uint32_t sample_count = 0;
   while (true) {
-    err = i2s_read(I2S_PORT, raw_samples, SAMPLES_SHORT * sizeof(int32_t), &bytes_read, 150 / portTICK_PERIOD_MS);
-    if (err != ESP_OK) {
-      log_e("I2S read failed: %d", err);
+    err = i2s_read(I2S_PORT, raw_samples, bytes_wanted, &bytes_read, 500 / portTICK_PERIOD_MS);
+    if (err != ESP_OK || bytes_read < bytes_wanted) {
+      log_e("I2S read short: err=%d bytes_read=%u/%u", err, (unsigned)bytes_read, (unsigned)bytes_wanted);
       continue;
+    }
+
+    if (sample_count < 3) {
+      log_i("raw[0..3]=%ld %ld %ld %ld", (long)raw_samples[0], (long)raw_samples[1],
+            (long)raw_samples[2], (long)raw_samples[3]);
     }
 
     // Convert raw int32 samples to float (separate buffers avoid a

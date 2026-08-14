@@ -1,5 +1,5 @@
-#ifndef NETWORK_H
-#define NETWORK_H
+#ifndef NET_MANAGER_H
+#define NET_MANAGER_H
 
 #include <Arduino.h>
 
@@ -99,4 +99,4 @@ private:
 // Global instance
 extern NetworkService network_service;
 
-#endif // NETWORK_H
+#endif // NET_MANAGER_H

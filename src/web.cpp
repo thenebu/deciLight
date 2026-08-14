@@ -1,6 +1,6 @@
 #include "web.h"
 #include "config.h"
-#include "network.h"
+#include "net_manager.h"
 #include "mqtt.h"
 #include <Preferences.h>
 #include <WiFi.h>
@@ -538,7 +538,7 @@ void WebService::handleHourlyReset() {
   server->send(200, "application/json", "{\"status\":\"ok\"}");
 }
 
-// NetworkSettings lives outside the Config spinlock (see network.h); this
+// NetworkSettings lives outside the Config spinlock (see net_manager.h); this
 // handler only ever runs on the web task, same as NetworkService's own
 // read/write paths, so no additional locking is needed here.
 void WebService::handleNetworkGet() {

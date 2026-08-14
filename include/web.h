@@ -5,7 +5,7 @@
 #include <freertos/FreeRTOS.h>
 #include <ArduinoJson.h>
 #include <time.h>
-#include "network.h"
+#include "net_manager.h"
 #include "config.h"
 
 // Ring buffer size for the history graph: 300 entries @ 1 sample/sec = 5

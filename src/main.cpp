@@ -22,7 +22,7 @@
 #include "config.h"
 #include "led.h"
 #include "microphone.h"
-#include "network.h"
+#include "net_manager.h"
 #include "mqtt.h"
 #include "web.h"
 
