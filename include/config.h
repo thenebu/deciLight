@@ -29,7 +29,7 @@ enum NoiseLevel {
 };
 
 //
-// PIN CONFIGURATION - ESP32 Noise Light
+// PIN CONFIGURATION - ESP32 noiselight
 //
 #define DATA_PIN 1               // WS2812 LED strip (7 LEDs)
 #define I2S_LR 3                // I2S L/R Select - GREEN wire (set HIGH=RIGHT channel)
@@ -96,5 +96,16 @@ constexpr double MIC_REF_AMPL = pow(10, double(MIC_SENSITIVITY) / 20) * ((1 << (
 // this #define, so the two are independent literals with no build-time
 // check keeping them in sync.
 #define OTA_PASSWORD "changeme-ota"
+
+// Username paired with OTA_PASSWORD for the web /update endpoint's HTTP
+// Basic Auth (in addition to being paired with OTA_PASSWORD for
+// ArduinoOTA, which only checks the password - ArduinoOTA itself doesn't
+// need a username, this define is purely for the web endpoint).
+#define OTA_USERNAME "admin"
+
+// Manually bumped on each release - not tied to git/build automatically.
+// Shown in the WebUI footer and published over MQTT, so an OTA update can
+// be confirmed to have actually taken.
+#define FIRMWARE_VERSION "1.2.0"
 
 #endif // CONFIG_H

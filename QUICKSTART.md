@@ -1,4 +1,4 @@
-# Quick Start Guide - Noise Traffic Light 🚦
+# Quick Start Guide - noiselight 🚦
 
 ## 1️⃣ Hardware Checklist
 

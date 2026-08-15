@@ -5,6 +5,8 @@
 #include <Preferences.h>
 #include <WiFi.h>
 #include <ArduinoJson.h>
+#include <Update.h>
+#include <esp_ota_ops.h>
 
 // Global instance
 WebService web_service;
@@ -24,6 +26,8 @@ WebService::WebService()
     last_dB_update(0),
     needs_save(false),
     network_settings_pending(false),
+    update_reboot_pending(false),
+    update_reboot_at_ms(0),
     task_handle(nullptr),
     config_mux(portMUX_INITIALIZER_UNLOCKED),
     dB_mux(portMUX_INITIALIZER_UNLOCKED),
@@ -33,6 +37,7 @@ WebService::WebService()
     hourly_day(-1),
     hourly_year(-1),
     hourly_reset_at(0),
+    last_alert_epoch(0),
     last_hourly_ms(0),
     last_hourly_flush_ms(0),
     hourly_dirty(false),
@@ -98,6 +103,11 @@ void WebService::init() {
   server->on("/api/config/export", HTTP_GET, [this]() { this->handleConfigExport(); });
   server->on("/api/config/import", HTTP_POST, [this]() { this->handleConfigImport(); });
   log_i("[WEB] Route /api/config/export, /api/config/import registered");
+
+  server->on("/update", HTTP_POST,
+    [this]() { this->handleUpdateResult(); },
+    [this]() { this->handleUpdateUpload(); });
+  log_i("[WEB] Route /update registered");
 
   server->onNotFound([this]() { this->handleNotFound(); });
   log_i("[WEB] 404 handler registered");
@@ -210,6 +220,16 @@ void WebService::webTaskHandler() {
       network_service.applySettings(pending_network_settings);
     }
 
+    // Reboot into the newly flashed firmware (deferred from
+    // handleUpdateUpload()'s UPLOAD_FILE_END) - one second after
+    // Update.end() succeeded gives handleUpdateResult()'s response time to
+    // flush to the browser before the device drops off the network.
+    if (update_reboot_pending && (millis() - update_reboot_at_ms > 1000)) {
+      update_reboot_pending = false;
+      log_i("[WEB] Rebooting into newly flashed firmware...");
+      ESP.restart();
+    }
+
     vTaskDelay(pdMS_TO_TICKS(50));  // Yield for 50ms
   }
 }
@@ -303,7 +323,19 @@ void WebService::accumulateHourlyStat(NoiseLevel level) {
   hourly_dirty = true;
   last_hourly_ms = now_ms;
 
+  if (level == ALERT) {
+    last_alert_epoch = now;
+  }
+
   portEXIT_CRITICAL(&hourly_mux);
+}
+
+// Thread-safe copy of last_alert_epoch - see comment in web.h.
+time_t WebService::getLastAlertEpoch() {
+  portENTER_CRITICAL(&hourly_mux);
+  time_t snapshot = last_alert_epoch;
+  portEXIT_CRITICAL(&hourly_mux);
+  return snapshot;
 }
 
 // Clears today's buckets immediately (manual reset) and persists right
@@ -462,11 +494,12 @@ void WebService::handleApiStatus() {
   double dB_snapshot = current_dB;
   portEXIT_CRITICAL(&dB_mux);
 
-  DynamicJsonDocument doc(96);
+  DynamicJsonDocument doc(160);
   doc["db"] = dB_snapshot;
   if (suggested_floor > 0.0) {
     doc["suggested_floor"] = suggested_floor;
   }
+  doc["firmware"] = FIRMWARE_VERSION;
   String json;
   serializeJson(doc, json);
   server->send(200, "application/json", json);
@@ -672,6 +705,108 @@ void WebService::handleConfigImport() {
   server->send(200, "application/json", "{\"status\":\"ok\"}");
 }
 
+// POST /update - streaming firmware upload, gated by OTA_PASSWORD (the same
+// credential ArduinoOTA already uses) via HTTP Basic Auth, since unlike the
+// other endpoints this one can brick or replace the firmware outright.
+// WebServer's upload API splits handling across two callbacks registered
+// together in init(): this one is invoked repeatedly as the multipart body
+// streams in, handleUpdateResult() once at the end to produce the actual
+// HTTP response.
+void WebService::handleUpdateUpload() {
+  HTTPUpload& upload = server->upload();
+
+  if (upload.status == UPLOAD_FILE_START) {
+    if (!server->authenticate(OTA_USERNAME, OTA_PASSWORD)) {
+      // Don't start the flash - handleUpdateResult() will see the same
+      // failed authenticate() check and send the 401.
+      log_e("[WEB] /update upload rejected: bad credentials");
+      return;
+    }
+
+    log_i("[WEB] /update upload starting: %s", upload.filename.c_str());
+
+    // Diagnostic only (see the "still shows old FIRMWARE_VERSION after a
+    // successful-looking OTA" investigation): log which partition is
+    // currently running vs. which one Update.begin() is about to target,
+    // so a stuck/repeating target partition is visible in the serial log
+    // instead of only showing up as "the version never changes" after the
+    // fact.
+    const esp_partition_t* running = esp_ota_get_running_partition();
+    const esp_partition_t* next = esp_ota_get_next_update_partition(NULL);
+    log_i("[WEB] OTA partitions: running=%s@0x%06x, target=%s@0x%06x",
+      running ? running->label : "?", running ? running->address : 0,
+      next ? next->label : "?", next ? next->address : 0);
+
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+      log_e("[WEB] Update.begin() failed: %s", Update.errorString());
+    }
+  } else if (upload.status == UPLOAD_FILE_WRITE) {
+    if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+      log_e("[WEB] Update.write() failed: %s", Update.errorString());
+    }
+  } else if (upload.status == UPLOAD_FILE_END) {
+    if (Update.end(true)) {
+      log_i("[WEB] /update upload complete: %u bytes", upload.totalSize);
+
+      // Diagnostic only - see the OTA-reverts-to-old-partition investigation:
+      // esp_ota_get_boot_partition() reads back what otadata says the NEXT
+      // boot should use, right now, before we ever call ESP.restart(). If
+      // this already shows the old partition instead of the one we just
+      // wrote, esp_ota_set_boot_partition() (called internally by
+      // Update.end(true) above) silently failed to persist - a write-time
+      // bug, not a bootloader-ignoring-otadata bug.
+      const esp_partition_t* boot_target = esp_ota_get_boot_partition();
+      log_i("[WEB] otadata boot partition immediately after Update.end(): %s@0x%06x",
+        boot_target ? boot_target->label : "?", boot_target ? boot_target->address : 0);
+
+      // ...and, just as importantly, in WHICH STATE. On a bootloader built
+      // with CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE (which is what the
+      // Arduino IDE esp32 3.x core flashes onto this board),
+      // esp_ota_set_boot_partition() marks the new slot ESP_OTA_IMG_NEW (0)
+      // rather than committing it outright - "boot it once, on probation".
+      // The new image then has to call
+      // esp_ota_mark_app_valid_cancel_rollback() or the bootloader reverts
+      // to the previous slot on the following reset. setup() in main.cpp
+      // does exactly that as of 1.1.6; before 1.1.6 nothing did, which is
+      // why every /update reported success and every reboot came back
+      // running the old firmware. Values: 0=NEW, 1=PENDING_VERIFY, 2=VALID,
+      // 3=INVALID, 4=ABORTED, 0xFFFFFFFF=UNDEFINED (rollback not in use).
+      if (boot_target) {
+        esp_ota_img_states_t target_state = ESP_OTA_IMG_UNDEFINED;
+        if (esp_ota_get_state_partition(boot_target, &target_state) == ESP_OK) {
+          log_i("[WEB] otadata state of %s after Update.end(): %d "
+                "(0=NEW/on-probation, 0xFFFFFFFF=UNDEFINED/committed)",
+            boot_target->label, (int)target_state);
+        }
+      }
+
+      update_reboot_pending = true;
+      update_reboot_at_ms = millis();
+    } else {
+      log_e("[WEB] Update.end() failed: %s", Update.errorString());
+    }
+  } else if (upload.status == UPLOAD_FILE_ABORTED) {
+    log_e("[WEB] /update upload aborted");
+    Update.end();
+  }
+}
+
+// Final response for POST /update, sent after handleUpdateUpload() above
+// has already streamed and applied (or failed to apply) the .bin.
+void WebService::handleUpdateResult() {
+  if (!server->authenticate(OTA_USERNAME, OTA_PASSWORD)) {
+    server->requestAuthentication();
+    return;
+  }
+
+  if (Update.hasError()) {
+    String msg = String("{\"status\":\"error\",\"message\":\"") + Update.errorString() + "\"}";
+    server->send(500, "application/json", msg);
+  } else {
+    server->send(200, "application/json", "{\"status\":\"ok\"}");
+  }
+}
+
 void WebService::handleNotFound() {
   server->send(404, "text/plain", "Not Found");
 }
@@ -792,7 +927,7 @@ const char* html_ui = R"rawliteral(
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Noise Light Config</title>
+  <title>noiselight Config</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -980,7 +1115,7 @@ const char* html_ui = R"rawliteral(
 </head>
 <body>
   <div class="container">
-    <h1>🎵 Noise Light</h1>
+    <h1>🎵 noiselight</h1>
     
     <div class="live-level">
       <div class="level-value">
@@ -1144,6 +1279,33 @@ const char* html_ui = R"rawliteral(
     </div>
 
     <div class="section" style="margin-top: 25px;">
+      <div class="section-title">Firmware-Update</div>
+      <div style="font-size: 12px; color: #999; margin-bottom: 10px;">
+        Neue .bin-Datei hochladen, um die Firmware zu aktualisieren. Das Gerät startet danach automatisch neu.
+      </div>
+
+      <div class="range-container">
+        <label>OTA-Passwort</label>
+        <input type="password" id="update-pass" placeholder="········"
+          style="width:100%; padding:8px; border:1px solid #ddd; border-radius:4px;">
+      </div>
+
+      <div class="range-container">
+        <label>Firmware-Datei</label>
+        <input type="file" id="update-file" accept=".bin"
+          style="width:100%; padding:8px; border:1px solid #ddd; border-radius:4px;">
+      </div>
+
+      <div class="level-bar-container" id="update-progress-container" style="display:none;">
+        <div class="level-bar" id="update-progress-bar" style="background:#667eea;"></div>
+      </div>
+
+      <div id="update-status" class="status" style="display:none;"></div>
+
+      <button onclick="uploadFirmware()">Firmware hochladen</button>
+    </div>
+
+    <div class="section" style="margin-top: 25px;">
       <div class="section-title">Konfiguration</div>
       <div style="font-size: 12px; color: #999; margin-bottom: 10px;">
         Export enthält WLAN-/MQTT-Passwörter im Klartext - Datei entsprechend behandeln.
@@ -1155,6 +1317,10 @@ const char* html_ui = R"rawliteral(
       <input type="file" id="import-file" accept="application/json" style="display:none;" onchange="importConfig(event)">
       <div id="config-io-status" class="status" style="display:none;"></div>
     </div>
+
+    <div style="font-size:11px; color:#bbb; text-align:center; margin-top:20px;">
+      <span id="fw-version"></span>
+    </div>
   </div>
 
   <script>
@@ -1163,7 +1329,8 @@ const char* html_ui = R"rawliteral(
         const res = await fetch('/api/status');
         const data = await res.json();
         document.getElementById('live-db').textContent = data.db.toFixed(1);
-        
+        document.getElementById('fw-version').textContent = 'Firmware ' + data.firmware;
+
         const minDb = 37;
         const maxDb = 80;
         const normalized = Math.max(0, Math.min(1, (data.db - minDb) / (maxDb - minDb)));
@@ -1513,6 +1680,66 @@ const char* html_ui = R"rawliteral(
         status.textContent = '✗ Import fehlgeschlagen';
         status.style.display = 'block';
       }
+    }
+
+    function uploadFirmware() {
+      const fileInput = document.getElementById('update-file');
+      const password = document.getElementById('update-pass').value;
+      const status = document.getElementById('update-status');
+      const progressContainer = document.getElementById('update-progress-container');
+      const progressBar = document.getElementById('update-progress-bar');
+
+      const file = fileInput.files[0];
+      if (!file) {
+        status.className = 'status';
+        status.textContent = '✗ Bitte zuerst eine .bin-Datei auswählen';
+        status.style.display = 'block';
+        return;
+      }
+
+      // XMLHttpRequest (not fetch) so xhr.upload.onprogress can drive the
+      // progress bar - fetch doesn't expose upload progress.
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/update', true);
+      xhr.setRequestHeader('Authorization', 'Basic ' + btoa('admin:' + password));
+
+      progressContainer.style.display = 'block';
+      progressBar.style.width = '0%';
+      status.className = 'status';
+      status.textContent = 'Wird hochgeladen...';
+      status.style.display = 'block';
+
+      xhr.upload.onprogress = function(e) {
+        if (e.lengthComputable) {
+          const pct = (e.loaded / e.total) * 100;
+          progressBar.style.width = pct + '%';
+        }
+      };
+
+      xhr.onload = function() {
+        if (xhr.status === 200) {
+          status.className = 'status success';
+          status.textContent = '✓ Erfolgreich - Gerät startet neu...';
+          setTimeout(() => location.reload(), 8000);
+        } else {
+          status.className = 'status';
+          let message = 'Upload fehlgeschlagen (Status ' + xhr.status + ')';
+          try {
+            const data = JSON.parse(xhr.responseText);
+            if (data.message) message = data.message;
+          } catch (e) {}
+          status.textContent = '✗ ' + message;
+        }
+      };
+
+      xhr.onerror = function() {
+        status.className = 'status';
+        status.textContent = '✗ Upload fehlgeschlagen (Netzwerkfehler)';
+      };
+
+      const formData = new FormData();
+      formData.append('firmware', file);
+      xhr.send(formData);
     }
 
     window.onload = function() {

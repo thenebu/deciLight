@@ -6,7 +6,7 @@
 // Fallback AP credentials, used when no WiFi SSID is configured yet or the
 // configured network can't be reached at boot - same values as the
 // previous AP-only behavior, so first-time setup still works unchanged.
-#define AP_FALLBACK_SSID "NoiseLight"
+#define AP_FALLBACK_SSID "noiselight"
 #define AP_FALLBACK_PASSWORD "12345678"
 
 #define MDNS_HOSTNAME "noiselight"

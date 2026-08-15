@@ -19,6 +19,7 @@
  */
 
 #include <Arduino.h>
+#include <esp_ota_ops.h>
 #include "config.h"
 #include "led.h"
 #include "microphone.h"
@@ -38,6 +39,66 @@ void setup() {
   Serial.println("\n\n--- BOOT START ---");
   
   log_e("\n=== NOISE TRAFFIC LIGHT STARTING ===");
+  log_i("Firmware version: %s", FIRMWARE_VERSION);
+  {
+    // Diagnostic only - see the "still shows old FIRMWARE_VERSION after a
+    // successful-looking OTA" investigation: which partition is actually
+    // executing this boot, so it can be compared against the "target"
+    // partition Update.begin() logs during the next OTA attempt.
+    const esp_partition_t* running = esp_ota_get_running_partition();
+    log_i("Running from partition: %s@0x%06x", running ? running->label : "?", running ? running->address : 0);
+  }
+
+  //
+  // OTA ROLLBACK SELF-CONFIRMATION  (root cause of "OTA succeeds, reboot
+  // shows the OLD firmware again")
+  //
+  // The bootloader flashed onto this board by the Arduino IDE (esp32 core
+  // 3.x) is built with CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y. With that
+  // option, esp_ota_set_boot_partition() - which Update.end(true) calls
+  // internally - does NOT simply say "boot app1 from now on". It writes an
+  // otadata entry pointing at app1 whose ota_state is ESP_OTA_IMG_NEW, i.e.
+  // "boot app1 once, on probation". That is why the diagnostic readback of
+  // esp_ota_get_boot_partition() right after Update.end() correctly reports
+  // app1: otadata really does point there. But the state machine then runs:
+  //
+  //   reset #1: bootloader flips NEW -> PENDING_VERIFY and boots app1
+  //   app1 must call esp_ota_mark_app_valid_cancel_rollback() to commit
+  //   reset #2: if it never did, the bootloader marks app1 ABORTED and
+  //             rolls back to app0 - the old firmware, exactly as observed
+  //
+  // Arduino core 3.x makes that call for you inside initArduino(), but the
+  // block is guarded by #ifdef CONFIG_APP_ROLLBACK_ENABLE, and the ESP-IDF
+  // that PlatformIO's esp32 core 2.0.5 ships does NOT define that symbol.
+  // So every .bin in firmware/ (all PlatformIO builds) boots once from app1
+  // on probation, never commits, and gets rolled back to app0 on the next
+  // reset - which is why USB flashing always works (esptool rewrites
+  // otadata at 0xe000 outright and never involves the rollback state
+  // machine) while /update never once stuck.
+  //
+  // Doing it explicitly here, with no #ifdef, makes the firmware commit
+  // itself regardless of which toolchain built it or how the bootloader on
+  // the device is configured. On a device whose bootloader has rollback
+  // disabled, the state is simply ESP_OTA_IMG_UNDEFINED and this is a
+  // no-op.
+  {
+    const esp_partition_t* running = esp_ota_get_running_partition();
+    esp_ota_img_states_t ota_state = ESP_OTA_IMG_UNDEFINED;
+    if (running && esp_ota_get_state_partition(running, &ota_state) == ESP_OK) {
+      log_i("[OTA] Running partition state: %d", (int)ota_state);
+      if (ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
+        esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
+        if (err == ESP_OK) {
+          log_i("[OTA] Image was on rollback probation - marked valid, "
+                "this firmware is now permanent");
+        } else {
+          log_e("[OTA] esp_ota_mark_app_valid_cancel_rollback() failed: %d", (int)err);
+        }
+      }
+    } else {
+      log_i("[OTA] Running partition has no otadata state (rollback not in use)");
+    }
+  }
   log_i("CPU: %d MHz, PSRAM: %d bytes", ESP.getCpuFreqMHz(), ESP.getFreePsram());
 
   // Initialize microphone (starts I2S reader task)

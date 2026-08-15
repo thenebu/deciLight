@@ -6,6 +6,7 @@
 #include <PubSubClient.h>
 
 #define MQTT_STATE_INTERVAL_MS 2000     // How often the state topic is republished
+#define MQTT_DEBUG_INTERVAL_MS 60000    // How often the debug/diagnostics topic is republished (slow-changing, no need for 2s cadence)
 #define MQTT_RECONNECT_INTERVAL_MS 5000 // Min gap between reconnect attempts
 #define MQTT_SOCKET_TIMEOUT_S 2         // Bounds how long a failed connect() can block the web task
 
@@ -43,9 +44,11 @@ private:
   void reconnect();
   void publishDiscovery();
   void publishState();
+  void publishDebug();
   String deviceId() const;   // noiselight-<last 6 hex of MAC>
   String topicState() const;
   String topicAvailability() const;
+  String topicDebug() const;
 
   WiFiClient wifi_client;
   PubSubClient client;
@@ -55,6 +58,7 @@ private:
 
   unsigned long last_reconnect_attempt;
   unsigned long last_state_publish;
+  unsigned long last_debug_publish;
   bool discovery_sent;
 };
 

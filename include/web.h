@@ -38,6 +38,13 @@ public:
   Config getConfigSnapshot();  // Thread-safe copy of the current config
   double getCurrentDb();  // Thread-safe copy of the current dB reading (used by MqttService)
 
+  // Thread-safe copy of the epoch of the most recent ALERT classification
+  // since boot (0 = never triggered, or not yet NTP-synced when it would
+  // have triggered). Guarded by hourly_mux, same as last_alert_epoch's
+  // write side in accumulateHourlyStat(). Used by MqttService for the
+  // "last alert" HA timestamp sensor.
+  time_t getLastAlertEpoch();
+
   // Accumulates time spent at `level` into the current hour's bucket for
   // today's hourly stats. Called once per main-loop iteration (main.cpp)
   // with the raw (non-decayed) classification of the current dB reading.
@@ -70,6 +77,8 @@ private:
   void handleNetworkSet();
   void handleConfigExport();
   void handleConfigImport();
+  void handleUpdateUpload();   // Streaming upload callback for POST /update
+  void handleUpdateResult();   // Final response handler for POST /update
   void handleNotFound();
 
   // Configuration methods
@@ -108,6 +117,16 @@ private:
   // (same pattern as needs_save) lets the response finish flushing first.
   bool network_settings_pending;
   NetworkSettings pending_network_settings;
+
+  // Same deferred-action pattern as network_settings_pending above:
+  // ESP.restart() can't happen inside the HTTP handler or the browser
+  // never gets the success response for the upload, since the underlying
+  // TCP connection isn't actually closed until the handler function
+  // returns. webTaskHandler() reboots one tick later, once the response
+  // has had a chance to flush.
+  bool update_reboot_pending;
+  unsigned long update_reboot_at_ms;
+
   TaskHandle_t task_handle;
   double suggested_floor = 0.0;  // 0 = no suggestion available yet (see setSuggestedFloor)
 
@@ -143,6 +162,7 @@ private:
   int hourly_day;                 // tm_yday of the day these buckets represent
   int hourly_year;                // tm_year, paired with hourly_day (year-boundary safety)
   time_t hourly_reset_at;         // epoch of last reset (manual or midnight rollover); 0 = unknown/no time yet
+  time_t last_alert_epoch;        // epoch of the most recent ALERT classification since boot; 0 = never
   unsigned long last_hourly_ms;   // millis() of the last accumulate call, for elapsed-delta
   unsigned long last_hourly_flush_ms;  // throttles NVS writes
   bool hourly_dirty;

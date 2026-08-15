@@ -1,10 +1,444 @@
-# Noise Traffic Light 🚦
+🇩🇪 [Deutsch](#deutsch) | 🇬🇧 [English](#english)
+
+## Deutsch
+
+# noiselight 🚦
+
+Ein Echtzeit-Lärmmonitor, der den Geräuschpegel als Ampel mit RGB-LEDs anzeigt.
+
+> ✅ **Status:** Alle unten beschriebenen Funktionen wurden auf echter Hardware getestet,
+> einschließlich der Home Assistant / MQTT-Discovery-Integration und des
+> browserbasierten OTA-Updates (inkl. Neustart in die neu geflashte Firmware, mehrfach
+> über einen Stromzyklus hinweg bestätigt).
+
+## 📋 Funktionen
+
+- **Echtzeit-Geräuscherkennung** über ein I2S-MEMS-Mikrofon
+- **3-farbige Ampelanzeige**:
+  - 🟢 **GRÜN** – Geräusch ist leise (unter dem Schwellenwert)
+  - 🟡 **GELB** – Geräusch ist moderat (im mittleren Bereich)
+  - 🔴 **ROT** – Geräusch ist laut (über dem Schwellenwert)
+- **7er-NeoPixel-RGB-LED-Streifen** für helle, gut sichtbare Rückmeldung
+- **A-bewertete Schallpegelmessung** (dBA) für eine realistische Wahrnehmung
+- **Konfigurierbare Schwellenwerte** über persistenten Speicher
+- **WiFi-Client-Modus** mit automatischem AP-Fallback für die Ersteinrichtung
+- **MQTT- / Home-Assistant-Integration** mit MQTT-Discovery
+- **Over-the-Air (OTA) Firmware-Updates**, sobald das Gerät mit dem Heimnetzwerk verbunden ist — per PlatformIO/ArduinoOTA **oder** direkt per Datei-Upload im Web-UI, ganz ohne Entwicklungsumgebung
+- **Konfigurations-Export/Import** zum Sichern oder Klonen der Geräteeinstellungen
+- **5-Minuten-Verlaufsdiagramm** im Web-UI
+- **Firmware-Version** sichtbar im Web-UI-Footer und über MQTT (Diagnose-Topic mit Uptime, freiem Speicher, WLAN-Signalstärke, IP-Adresse und letztem Reset-Grund)
+- **"Letzter Alarm"-Zeitstempel** über MQTT (Home-Assistant-Timestamp-Entity, zeigt automatisch "vor X Minuten" an)
+
+## 🛒 Verwendete Hardware
+
+Diese Teile habe ich selbst gekauft (Amazon.de, Stand: wie unten verlinkt):
+
+| Komponente | Preis | Hinweis | Link |
+|-----------|-------|---------|------|
+| LED | 18€ (5er-Pack, 3,60€/Stk.) | WS2812 RGB-LED-Ring, 7×5050 mit integrierten Treibern | [Amazon](https://www.amazon.de/dp/B09K57Y9FL?ref=ppx_yo2ov_dt_b_fed_asin_title) |
+| Board | 20€ (2er-Pack, 10,00€/Stk.) | Waveshare ESP32-S3 Mini Development Board | [Amazon](https://www.amazon.de/dp/B0CSK8B4GS?ref=ppx_yo2ov_dt_b_fed_asin_title) |
+| Mikrofon | 9€ (3er-Pack, 3,00€/Stk.) | INMP441 omnidirektionales Mikrofonmodul, 24-Bit I2S | [Amazon](https://www.amazon.de/dp/B0DX1VMRK1?ref_=ppx_hzsearch_conn_dt_b_fed_asin_title_2) |
+
+Grobe Gesamtkosten für **ein** komplettes Gerät (je ein LED-Ring + Board + Mikrofon):
+3,60€ + 10€ + 3€ ≈ **16,60€ pro Gerät**.
+
+Da alle drei Teile im Mehrfach-Pack verkauft werden, lassen sich mit den übrigen Teilen
+mehrere weitere Geräte bauen, ohne viel mehr als für ein einzelnes zu bezahlen. Preise
+und Verfügbarkeit entsprechen dem Stand, als die Links hinzugefügt wurden, und können
+sich ändern. Die Links sind normale Amazon-Links (kein Affiliate-Tracking durch dieses
+Projekt) — einfach das, was ich selbst gekauft habe.
+
+## 💻 Kompatible Hardware
+
+Dieses Projekt ist auf **ESP32** zugeschnitten — nicht auf ESP8266 oder andere
+Mikrocontroller. Es nutzt ESP32-spezifische Peripherie (I2S für das Mikrofon, RMT für
+die WS2812-LEDs) sowie FreeRTOS-Multitasking über zwei Kerne. Mindestanforderungen an
+ein Ersatz-/Alternativboard:
+
+- **Chip:** ESP32 (Xtensa- oder RISC-V-Varianten wie S3/C3) mit I2S- und
+  RMT-Peripherie. Getestet auf **ESP32-S3**; andere ESP32-Varianten mit passender
+  Pinbelegung sollten ebenfalls funktionieren, sind aber ungetestet.
+- **Flash:** mindestens **4 MB**. Die OTA-Partitionstabelle (`default.csv`) braucht
+  zwei App-Partitionen à ~1,25 MB für abwechselndes Flashen — die aktuelle Firmware
+  belegt davon bereits ~86 % einer Partition, kleinere Flash-Größen reichen nicht.
+- **RAM:** die üblichen ~320 KB internes SRAM eines ESP32(-S3) reichen locker (aktuell
+  ~31 % Auslastung zur Laufzeit); **PSRAM wird nicht benötigt**.
+- **WLAN:** 2,4-GHz-WiFi (Pflicht für Web-UI, MQTT und OTA).
+- **USB:** Natives USB-CDC (wie beim ESP32-S3) vereinfacht Flashen und seriellen
+  Monitor erheblich, ist aber kein Hard-Requirement — ein Board mit klassischer
+  USB-UART-Brücke funktioniert auch, dann greift aber die Log-Umleitung in
+  `include/config.h` nicht (die ist speziell für Boards ohne UART-Brücke gedacht,
+  siehe Kommentar dort).
+
+**Nicht kompatibel:** ESP8266 (kein I2S/RMT, kein FreeRTOS-Multicore, andere
+Partitionierung) sowie generische AVR-/STM32-Boards ohne ESP-IDF-Unterstützung.
+
+## 🔧 Hardware-Einrichtung
+
+### Pin-Konfiguration
+
+| Komponente | Pin | Farbe | Beschreibung |
+|-----------|-----|-------|-------------|
+| **WS2812 LED-Daten** | GPIO 1 | - | NeoPixel-Streifen (7 LEDs) |
+| **I2S L/R Select** | GPIO 3 | Grün | Mikrofon-Kanalauswahl (HIGH = RECHTER Kanal) |
+| **I2S Word Select** | GPIO 4 | Blau | Mikrofon L/R-Takt |
+| **I2S Serial Clock** | GPIO 5 | Weiß | Mikrofon-Bittakt |
+| **I2S Serial Data** | GPIO 2 | Gelb | Mikrofon-Audiodaten |
+| **Stromversorgung (5V)** | 5V | - | USB-Netzteil |
+| **GND** | GND | - | Masse |
+
+## 📊 Funktionsweise
+
+### Audio-Verarbeitungspipeline
+
+1. **I2S-Abtastung** (48 kHz, 32-Bit)
+   - Erfasst kontinuierlich Audio vom Mikrofon
+   - Hochpräzise digitale Abtastung
+
+2. **IIR-Filterung**
+   - **Equalizer-Filter** (INMP441): Glättet den Frequenzgang des Mikrofons
+   - **A-Bewertungsfilter**: Bildet die Empfindlichkeit des menschlichen Ohrs nach
+     (betont mittlere Frequenzen)
+
+3. **Schallpegelberechnung**
+   - Wandelt gefilterte Samples in dB (Dezibel) um
+   - Nutzt Mikrofonkalibrierung: Referenz 94 dB SPL
+   - LEQ (äquivalenter Dauerschallpegel) über 0,15-Sekunden-Blöcke
+
+4. **Entscheidungslogik**
+   ```
+   if (Leq < dB_min)     → GREEN   (quiet)
+   if (dB_min ≤ Leq < dB_max) → YELLOW  (moderate)
+   if (Leq ≥ dB_max)     → RED     (loud)
+   ```
+
+## 🎚️ Konfiguration
+
+### Standard-Schwellenwerte
+
+```cpp
+dB_min_default = 40   // Below 40 dB → GREEN
+dB_max_default = 60   // Above 60 dB → RED
+```
+
+### Empfohlene Einstellungen
+
+| Umgebung | dB_min | dB_max | Hinweise |
+|------------|--------|--------|-------|
+| Bibliothek/Ruhig | 30 | 50 | Sehr leise Räume |
+| Klassenzimmer | 40 | 60 | Normaler Unterricht |
+| Aktives Klassenzimmer | 45 | 70 | Gruppenarbeitsphasen |
+| Werkstatt | 60 | 80 | Toleriert Maschinenlärm |
+
+## 🌐 WiFi- und Web-Konfiguration
+
+### WiFi-Modi
+
+Das Gerät verbindet sich mit deinem Heimnetzwerk als **WiFi-Client (STA)**. Falls beim
+Start noch kein Netzwerk konfiguriert ist oder das konfigurierte Netzwerk nicht
+erreichbar ist, fällt es auf seinen eigenen **Access Point (AP)** zurück, sodass du das
+Web-UI immer erreichen kannst:
+
+- **SSID (Netzwerkname):** `noiselight`
+- **Passwort:** `12345678`
+- **IP-Adresse:** `192.168.4.1`
+- **Port:** `80` (HTTP)
+
+Sobald das Gerät mit dem Heimnetzwerk verbunden ist, ist es außerdem per mDNS unter
+**`http://noiselight.local`** erreichbar.
+
+### Erststart-WiFi über .env (optional)
+
+Falls dein Smartphone/Laptop den `noiselight`-AP nicht sehen oder nicht beitreten kann,
+oder du diesen Schritt lieber ganz überspringen möchtest, kopiere `.env.example` nach
+`.env` (in .gitignore, wird nie committet) und trage deine Heim-WiFi-Zugangsdaten ein:
+
+```bash
+cp .env.example .env
+# edit .env: WIFI_SSID=..., WIFI_PASSWORD=...
+platformio run -t upload -e esp32-s3-devkitc1-n4r2
+```
+
+`load_env.py` bettet diese Werte als NVS-Standard ein, den ein frisch geflashtes Gerät
+bei seinem allerersten Start verwendet — das ist nur relevant, bis die WiFi-Einstellungen
+des Geräts einmal über das Web-UI gespeichert wurden (oder bereits aus einem früheren
+Flash-Vorgang im NVS vorhanden sind); danach gewinnt immer der im NVS gespeicherte Wert
+gegenüber dem `.env`-Standard.
+
+### Einrichtungsschritte
+
+1. **Erstverbindung (AP-Fallback):**
+   - Öffne die WiFi-Einstellungen deines Geräts (Smartphone, Tablet, Laptop)
+   - Wähle das Netzwerk `noiselight`
+   - Gib das Passwort ein: `12345678`
+
+2. **Konfigurationsseite öffnen:**
+   - Öffne einen Browser und gehe zu: `http://192.168.4.1`
+   - Das Web-Interface lädt automatisch
+
+3. **Heim-WiFi beitreten:**
+   - Trage SSID/Passwort deines Netzwerks im Bereich **Network** des Web-UI ein und
+     speichere
+   - Das Gerät verbindet sich mit deinen Zugangsdaten neu; bei Erfolg beendet es den AP
+     und ist fortan unter `http://noiselight.local` (oder seiner neuen DHCP-Adresse)
+     erreichbar
+   - Schlägt die Verbindung fehl, fällt das Gerät wieder in den AP-Modus zurück, sodass
+     du nie ausgesperrt wirst
+
+4. **Einstellungen in Echtzeit konfigurieren:**
+   - Live-dB-Pegelanzeige aktualisiert sich alle 200 ms
+   - Alle Schieberegler aktualisieren die Vorschau sofort
+   - Drücke **Save Configuration**, um die Einstellungen im Gerätespeicher zu sichern
+
+### Web-Interface-Funktionen
+
+![noiselight Web Interface – Live-Pegel, Verlauf und Tagesstatistik](./doc/webUI-live.png)
+*Live-Pegelanzeige, Verlaufsdiagramm und Tagesstatistik*
+
+![noiselight Web Interface – Konfiguration](./doc/webUI.jpeg)
+*Anzeigemodus, LED-Einstellungen und Umschaltpunkte*
+
+**Anzeigemodus**
+- **Ampel:** Alle LEDs zeigen eine einzelne Farbe (GRÜN/GELB/ROT)
+- **VU-Meter:** LEDs bilden einen Verlaufsbalken, der die Geräuschintensität zeigt
+
+**LED-Einstellungen**
+- **Helligkeit:** 0–255 (Standard: 57)
+- **Farbauswahl:** Individuelle Farben für jede Lärmstufe wählen
+
+**Umschaltpunkte (dB)**
+- **Floor Level:** Geräusch-Grundpegel (Standard: 37 dB)
+- **Grün→Gelb:** Übergangsschwelle (Standard: 52 dB)
+- **Gelb→Rot:** Alarmschwelle (Standard: 62 dB)
+- **Farbvorschau:** Visueller Balken zeigt LED-Farben über den dB-Bereich
+
+**Reaktionszeiten**
+- **Decay Time:** Wie lange die aktuelle Farbe gehalten wird, nachdem der Ton
+  aufgehört hat (0–3000 ms, Standard: 2400 ms)
+- **Response Time:** Minimales Aktualisierungsintervall zwischen LED-Wechseln
+  (0–500 ms, Standard: 50 ms)
+
+**Verlaufsdiagramm**
+- Live-Liniendiagramm der letzten 5 Minuten der dB-Messwerte (1 Sample/Sek.), bereitgestellt
+  über `/api/history`
+
+**Tagesstatistik (tägliche Zeitverteilung)**
+- Gestapeltes Balkendiagramm, das zeigt, wie viel Zeit jeder Stunde (heute, 24 Buckets)
+  in welchem Farbzustand (NORMAL/WARNING/ALERT) verbracht wurde, bereitgestellt über
+  `/api/hourly`
+- Setzt sich automatisch um Mitternacht (Ortszeit) zurück; ein **Zurücksetzen**-Button
+  löscht sie auch manuell über `/api/hourly/reset`
+- Erfordert, dass die Uhr des Geräts zuerst per NTP synchronisiert wurde (siehe
+  **Zeitzone** unten) — bis dahin zeigt das Diagramm einen Hinweis statt Daten
+- Die Einteilung in Buckets basiert auf der rohen (nicht gedämpften) Geräuschklassifizierung
+  bei jedem Loop-Tick — derselben Klassifizierung, die MQTT als "level"-Sensor
+  veröffentlicht — und nicht auf der anzeigegeglätteten Farbe, die ruhige Phasen
+  unterbewerten würde
+
+**Zeitzone**
+- Der Bereich **Network** enthält ein Feld **Zeitzone (POSIX TZ)**, z. B.
+  `CET-1CEST,M3.5.0,M10.5.0/3` (Europe/Berlin, Standard) oder `EST5EDT,M3.2.0,M11.1.0`
+  (US-Ostküste) — wird direkt an die `configTzTime()`-Funktion des ESP32 übergeben,
+  sodass die Stunden-Buckets der Tagesstatistik mit deiner lokalen Uhrzeit
+  übereinstimmen, inklusive Sommerzeitumstellung
+- Anders als ein fester UTC-Offset kodiert ein POSIX-TZ-String auch, *wann* sich die
+  Uhr verschiebt (der Teil `M3.5.0,M10.5.0/3`), sodass Sommer-/Winterzeit automatisch
+  gehandhabt wird — keine manuelle Anpassung zweimal im Jahr nötig
+- Erfordert eine Internetverbindung (NTP-Sync gegen `pool.ntp.org`/`time.nist.gov`);
+  greift nicht im AP-Fallback-Modus ohne Internetzugang
+
+### Persistenter Speicher
+
+Alle Konfigurationsänderungen werden automatisch im **NVS (Non-Volatile Storage)** des
+ESP32 gespeichert:
+- Einstellungen überstehen einen Stromausfall
+- Werden beim Gerätestart automatisch geladen
+- Konfiguration erreichbar über `/api/config`, WiFi-/MQTT-Einstellungen über
+  `/api/network`
+
+### Konfigurations-Export/Import
+
+Das Web-UI kann die gesamte Gerätekonfiguration (LED-/Schwellenwert-Einstellungen
+**und** WiFi-/MQTT-Zugangsdaten) als JSON-Datei über `/api/config/export` exportieren
+und über `/api/config/import` auf einem anderen Gerät (oder nach einem Reset)
+wiederherstellen. Praktisch, um eine funktionierende Einrichtung zu sichern oder auf
+ein zweites Gerät zu klonen.
+
+> ⚠️ Die exportierte Datei enthält deine WiFi- und MQTT-Passwörter im Klartext —
+> behandle sie wie jede andere Zugangsdatendatei.
+
+## 🏠 MQTT- / Home-Assistant-Integration
+
+Sobald das Gerät mit dem Heimnetzwerk verbunden ist, kann es seine Lärmmesswerte an
+einen MQTT-Broker senden und sich selbst über MQTT-Discovery bei **Home Assistant**
+anmelden — keine manuelle Entitätskonfiguration nötig.
+
+### Einrichtung
+
+1. Trage im Bereich **Network** des Web-UI Host/Port deines MQTT-Brokers ein sowie,
+   falls erforderlich, Benutzername/Passwort, und speichere.
+2. Das Gerät verbindet sich automatisch und veröffentlicht ein
+   Home-Assistant-Discovery-Payload unter `homeassistant/sensor/<device-id>/...`, das
+   zwei Entitäten bereitstellt:
+   - **Noise Level** – der aktuelle dB-Messwert, auf eine ganze Zahl gerundet
+   - **Noise Level Status** – `normal` / `warning` / `alert`
+3. Der Status wird alle ~2 Sekunden an `noiselight/<device-id>/state` veröffentlicht,
+   mit einem Verfügbarkeits-Topic (`.../availability`), sodass Home Assistant das Gerät
+   als offline markiert, wenn die Verbindung abbricht.
+4. Ein zusätzliches Diagnose-Topic (`noiselight/<device-id>/debug`, alle 60 Sekunden)
+   liefert Firmware-Version, Uptime, freien Heap, WLAN-Signalstärke, IP-Adresse und
+   letzten Reset-Grund als eigene "diagnostic"-Entitäten in Home Assistant, plus einen
+   Zeitstempel-Sensor "Letzter Alarm (Rot)", der automatisch anzeigt, wie lange der
+   letzte Alarm-Zustand her ist.
+
+Die Geräte-ID wird aus den letzten 6 Hex-Ziffern der MAC-Adresse abgeleitet (z. B.
+`noiselight-a1b2c3`).
+
+## 📡 OTA-Updates (Over-the-Air)
+
+Sobald das Gerät mit deinem Heimnetzwerk verbunden ist (STA-Modus), kann die Firmware
+statt per USB über WiFi aktualisiert werden — mit der dedizierten
+`esp32-s3-devkitc1-n4r2-ota`-PlatformIO-Umgebung:
+
+```bash
+platformio run -t upload -e esp32-s3-devkitc1-n4r2-ota
+```
+
+Dies lädt auf `noiselight.local` hoch und benötigt das in `include/config.h`
+konfigurierte OTA-Passwort (`OTA_PASSWORD`, muss mit `upload_flags` in
+`platformio.ini` übereinstimmen). **Ändere das Standardpasswort, bevor du das Gerät in
+deinem Heimnetzwerk einsetzt** — sonst kann jeder im selben Netzwerk einen
+OTA-Flash-Versuch starten. OTA ist erst nach einer erfolgreichen WiFi-STA-Verbindung
+aktiviert; im AP-Fallback-Modus ist es nie erreichbar.
+
+> **Toolchain-Hinweis:** `platformio.ini` pinnt die `espressif32`-Platform auf den
+> [pioarduino](https://github.com/pioarduino/platform-espressif32)-Fork (Arduino-ESP32
+> 3.3.11 / ESP-IDF 5.5.5) — bewusst dieselbe Core-Generation wie die Arduino-IDE-
+> Installation. Der ESP32-S3-Bootloader hat App-Rollback aktiviert: ein per OTA
+> geschriebenes Image muss vom selben Core-Generation stammen wie der Bootloader,
+> sonst validiert das Image nicht und der Bootloader fällt beim nächsten Neustart
+> stillschweigend auf die alte Partition zurück, ohne die neue Firmware auch nur
+> einmal zu starten. Mit gepinntem `pioarduino` und einer Selbstbestätigung beim Boot
+> (`esp_ota_mark_app_valid_cancel_rollback()` in `src/main.cpp`, sobald die laufende
+> Partition auf "pending verify" steht) funktioniert OTA jetzt zuverlässig — mehrfach
+> über einen echten Stromzyklus hinweg getestet.
+
+**Browserbasiertes Hochladen:** Das WebUI hat außerdem einen eigenen Bereich
+"Firmware-Update" zum direkten Hochladen einer `.bin`-Datei aus einem Browser-Tab,
+ohne PlatformIO oder Arduino IDE. Der `/update`-Endpoint ist per HTTP Basic Auth
+geschützt — Benutzername `admin` (`OTA_USERNAME`), Passwort `OTA_PASSWORD` (beide in
+`include/config.h`). Trägst du im WebUI-Passwortfeld das richtige `OTA_PASSWORD` ein,
+läuft der Upload direkt durch; rufst du `/update` ohne diese Zugangsdaten auf (oder ist
+das Feld leer/falsch), fragt stattdessen der Browser selbst mit einem Login-Popup nach
+Benutzername/Passwort. Fertige Binärdateien für diesen Weg liegen im Verzeichnis
+[`firmware/`](firmware/) — eine `.bin` pro `FIRMWARE_VERSION`, automatisch von jedem
+`pio run` gebaut.
+
+## 🚀 Bauen und Hochladen
+
+### Voraussetzungen
+
+- PlatformIO (VS-Code-Erweiterung oder CLI)
+- Arduino IDE (optional, für direkte Kompilierung)
+
+### Build
+
+```bash
+# Using PlatformIO
+platformio run -e esp32-s3-devkitc1-n4r2
+
+# Or in VS Code: Ctrl+Shift+B → Build
+```
+
+### Upload
+
+```bash
+# Using PlatformIO (USB)
+platformio run -t upload -e esp32-s3-devkitc1-n4r2
+
+# Or over WiFi, once on your home network (see OTA section above)
+platformio run -t upload -e esp32-s3-devkitc1-n4r2-ota
+
+# Or in VS Code: Ctrl+Shift+B → Upload
+```
+
+## 📈 Serielle Ausgabe
+
+Das Gerät gibt dB-Messwerte über den seriellen Monitor aus (115200 Baud):
+
+```
+Leq: 45.3 dB | Min: 40 | Max: 60 | GREEN
+Leq: 62.1 dB | Min: 40 | Max: 60 | RED
+Leq: 55.2 dB | Min: 40 | Max: 60 | YELLOW
+```
+
+## 🔧 Kalibrierung
+
+### Mikrofonempfindlichkeit
+
+Wenn die Messwerte durchgehend abweichen:
+
+1. **Bekannten Schallpegel messen** (z. B. mit einer Smartphone-App)
+2. **Mit der seriellen Ausgabe vergleichen**
+3. **MIC_OFFSET_DB in `main.cpp` anpassen:**
+   ```cpp
+   #define MIC_OFFSET_DB 3.0103  // Increase/decrease calibration offset
+   ```
+
+### Optimale Platzierung
+
+- Mikrofon in der **Raummitte** montieren
+- **Vermeide** die Platzierung nahe Wänden oder Ecken (Reflexionen)
+- **Halte Abstand** zu Vibrationsquellen
+- Sorge für einen **freien Luftweg** (nicht abgedeckt)
+
+## 🔴 Fehlerbehebung
+
+| Problem | Ursache | Lösung |
+|-------|-------|----------|
+| Immer GRÜN | Mikrofon nicht angeschlossen | I2S-Pins prüfen (GPIO 3, 5, 2) |
+| Immer ROT | Kalibrierung falsch | MIC_OFFSET_DB anpassen |
+| Keine serielle Ausgabe | Falsche Baudrate | Auf 115200 einstellen |
+| Keine LED-Reaktion | Falscher LED-Pin | GPIO-1-Verbindung prüfen |
+| Hoher Grundgeräuschpegel des Mikrofons | Elektrisches Rauschen | Datenleitungen abschirmen, Stromversorgung prüfen |
+| Gerät bleibt am `noiselight`-AP hängen | Heim-WiFi nicht erreichbar/falsches Passwort | Zugangsdaten im Web-UI prüfen oder erneut mit dem AP verbinden und neu eingeben |
+| MQTT-Entitäten erscheinen nicht in Home Assistant | Broker nicht erreichbar oder Discovery noch nicht gesendet | Host/Port/Zugangsdaten in den Netzwerkeinstellungen prüfen; Discovery wird bei jeder Neuverbindung erneut gesendet |
+| OTA-Upload schlägt fehl/läuft in Timeout | Gerät im AP-Fallback oder falsches `--auth`-Passwort | Sicherstellen, dass das Gerät im Heimnetzwerk ist (`noiselight.local` löst auf) und `OTA_PASSWORD` mit `platformio.ini` übereinstimmt |
+
+## 📚 Referenzen
+
+- **Original deciLight Project**: https://github.com/bbbenji/deciLight
+- **FastLED Documentation**: http://fastled.io/
+- **ESP-IDF I2S API**: https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/peripherals/i2s.html
+- **A-weighting Filter**: https://en.wikipedia.org/wiki/A-weighting
+- **PubSubClient (MQTT)**: https://github.com/knolleary/pubsubclient
+- **Home Assistant MQTT Discovery**: https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery
+
+## 📝 Lizenz
+
+Dieses Projekt basiert auf [deciLight](https://github.com/bbbenji/deciLight) (GPL-3.0).
+Lizenziert unter der GNU General Public License v3.0.
+
+## 🎨 Geplante Erweiterungen
+
+- [ ] IR-Fernbedienung zur Schwellenwertanpassung
+- [ ] Mehrere Lärmzonen (Klassenzimmer-Netzwerk)
+- [ ] Anpassbare Farbzuordnung
+- [ ] Mehrtägiger Verlauf für die Tagesstatistik-Ansicht (aktuell nur ein Tag,
+      Reset um Mitternacht)
+
+---
+
+## English
+
+# noiselight 🚦
 
 A real-time noise monitor that displays sound levels as a traffic light using RGB LEDs.
 
 > ✅ **Status:** All features below have been tested on real hardware, including the
-> Home Assistant / MQTT discovery integration — the device and its Noise Level /
-> Noise Level Status entities show up in Home Assistant automatically.
+> Home Assistant / MQTT discovery integration and the browser-based OTA update
+> (including rebooting into the newly flashed firmware, confirmed across a real power
+> cycle, more than once).
 
 ## 📋 Features
 
@@ -18,9 +452,54 @@ A real-time noise monitor that displays sound levels as a traffic light using RG
 - **Configurable thresholds** via persistent storage
 - **WiFi client mode** with automatic AP fallback for first-time setup
 - **MQTT / Home Assistant integration** with MQTT discovery
-- **Over-the-air (OTA) firmware updates** once connected to your home network
+- **Over-the-air (OTA) firmware updates** once connected to your home network — via PlatformIO/ArduinoOTA **or** a direct file upload in the web UI, no dev tooling required
 - **Config export/import** for backing up or cloning device settings
 - **5-minute history graph** in the web UI
+- **Firmware version** visible in the web UI footer and over MQTT (a diagnostics topic with uptime, free heap, WiFi signal strength, IP address, and last reset reason)
+- **"Last alert" timestamp** over MQTT (a Home Assistant timestamp entity that automatically renders "X minutes ago")
+
+## 🛒 Hardware Used
+
+This is the exact parts list I actually bought (Amazon.de, as of when the links below
+were added):
+
+| Component | Price | Note | Link |
+|-----------|-------|------|------|
+| LED | €18 (5-pack, €3.60/unit) | WS2812 RGB LED ring, 7×5050 with integrated drivers | [Amazon](https://www.amazon.de/dp/B09K57Y9FL?ref=ppx_yo2ov_dt_b_fed_asin_title) |
+| Board | €20 (2-pack, €10.00/unit) | Waveshare ESP32-S3 Mini Development Board | [Amazon](https://www.amazon.de/dp/B0CSK8B4GS?ref=ppx_yo2ov_dt_b_fed_asin_title) |
+| Microphone | €9 (3-pack, €3.00/unit) | INMP441 omnidirectional microphone module, 24-bit I2S | [Amazon](https://www.amazon.de/dp/B0DX1VMRK1?ref_=ppx_hzsearch_conn_dt_b_fed_asin_title_2) |
+
+Rough total cost for **one** complete device (one LED ring + one board + one
+microphone): €3.60 + €10 + €3 ≈ **€16.60 per unit**.
+
+Since all three parts come in multi-packs, the leftover parts let you build several
+more devices for not much more than the cost of one. Prices and availability are as of
+when these links were added and may change. These are plain Amazon links (not
+affiliate-tracked by this project) — just what I bought.
+
+## 💻 Compatible Hardware
+
+This project is built for **ESP32** — not ESP8266 or other microcontrollers. It uses
+ESP32-specific peripherals (I2S for the microphone, RMT for the WS2812 LEDs) and
+FreeRTOS multitasking across two cores. Minimum requirements for a
+replacement/alternative board:
+
+- **Chip:** ESP32 (Xtensa or RISC-V variants such as S3/C3) with I2S and RMT
+  peripherals. Tested on **ESP32-S3**; other ESP32 variants with a matching pinout
+  should also work but are untested.
+- **Flash:** at least **4 MB**. The OTA partition table (`default.csv`) needs two
+  ~1.25 MB app partitions for A/B flashing — current firmware already uses ~86% of
+  one partition, so smaller flash sizes won't fit.
+- **RAM:** the usual ~320 KB of internal SRAM on an ESP32(-S3) is plenty (~31% runtime
+  usage currently); **PSRAM is not required**.
+- **WiFi:** 2.4 GHz WiFi (required for the web UI, MQTT, and OTA).
+- **USB:** Native USB-CDC (like the ESP32-S3) makes flashing and serial monitoring
+  much simpler, but isn't a hard requirement — a board with a classic USB-UART bridge
+  chip also works, though the log redirection in `include/config.h` won't kick in
+  (that's specifically for boards without a UART bridge, see the comment there).
+
+**Not compatible:** ESP8266 (no I2S/RMT, no FreeRTOS multicore, different
+partitioning) or generic AVR/STM32 boards without ESP-IDF support.
 
 ## 🔧 Hardware Setup
 
@@ -35,27 +514,6 @@ A real-time noise monitor that displays sound levels as a traffic light using RG
 | **I2S Serial Data** | GPIO 2 | Yellow | Microphone audio data |
 | **Power (5V)** | 5V | - | USB power supply |
 | **GND** | GND | - | Ground |
-
-### Wiring Diagram
-
-```
-ESP32                          I2S Microphone (e.g., INMP441)
-───────                        ──────────────────
-GPIO 3 (green, HIGH)───────────→ L/R (channel select = RIGHT)
-GPIO 4 (blue) ─────────────────→ WS (L/R Clock)
-GPIO 5 (white) ─────────────────→ SCK (Bit Clock)
-GPIO 2 (yellow)─────────────────→ SD (Serial Data)
-GND ───────────────────────────→ GND
-3V3 ───────────────────────────→ VDD (if 3.3V version)
-```
-
-```
-ESP32                          NeoPixel Strip (WS2812)
-───────                        ──────────────────
-GPIO 1 ────────────────────────→ DI (Data In)
-5V ────────────────────────────→ 5V
-GND ───────────────────────────→ GND
-```
 
 ## 📊 How It Works
 
@@ -107,7 +565,7 @@ The device connects to your home network as a **WiFi client (STA)**. If no netwo
 configured yet, or the configured network can't be reached at boot, it falls back to
 its own **Access Point (AP)** so you can always reach the web UI:
 
-- **SSID (Network Name):** `NoiseLight`
+- **SSID (Network Name):** `noiselight`
 - **Password:** `12345678`
 - **IP Address:** `192.168.4.1`
 - **Port:** `80` (HTTP)
@@ -117,7 +575,7 @@ Once connected to your home network, the device is also reachable via mDNS at
 
 ### First-Boot WiFi via .env (optional)
 
-If your phone/laptop can't see or join the `NoiseLight` AP, or you'd rather skip that
+If your phone/laptop can't see or join the `noiselight` AP, or you'd rather skip that
 step entirely, copy `.env.example` to `.env` (gitignored, never committed) and fill in
 your home WiFi credentials:
 
@@ -136,7 +594,7 @@ NVS-stored value always wins over the `.env` default.
 
 1. **First-time connection (AP fallback):**
    - Open your device's WiFi settings (phone, tablet, laptop)
-   - Select network `NoiseLight`
+   - Select network `noiselight`
    - Enter password: `12345678`
 
 2. **Open the configuration page:**
@@ -156,7 +614,11 @@ NVS-stored value always wins over the `.env` default.
 
 ### Web Interface Features
 
-![Noise Light Web Interface](./doc/webUI.jpeg)
+![noiselight Web Interface – live level, history graph and Tagesstatistik](./doc/webUI-live.png)
+*Live level display, history graph, and Tagesstatistik*
+
+![noiselight Web Interface – configuration](./doc/webUI.jpeg)
+*Display mode, LED settings, and switchover points*
 
 **Display Mode**
 - **Traffic Light:** All LEDs show single color (GREEN/YELLOW/RED)
@@ -235,6 +697,11 @@ entity configuration needed.
 3. State is published every ~2 seconds to `noiselight/<device-id>/state`, with an
    availability topic (`.../availability`) so Home Assistant marks the device offline
    if the connection drops.
+4. An additional diagnostics topic (`noiselight/<device-id>/debug`, every 60 seconds)
+   publishes firmware version, uptime, free heap, WiFi signal strength, IP address,
+   and last reset reason as their own "diagnostic" entities in Home Assistant, plus a
+   "Last Red Trigger" timestamp sensor that automatically shows how long ago the last
+   alert state was.
 
 The device ID is derived from the last 6 hex digits of its MAC address (e.g.
 `noiselight-a1b2c3`).
@@ -254,6 +721,27 @@ This uploads to `noiselight.local` and requires the OTA password configured in
 **Change the default password before deploying to your home network** — anyone on the
 same network can otherwise attempt an OTA flash. OTA is only enabled after a successful
 WiFi STA connection; it's never exposed while the device is on the AP fallback.
+
+> **Toolchain note:** `platformio.ini` pins the `espressif32` platform to the
+> [pioarduino](https://github.com/pioarduino/platform-espressif32) fork (Arduino-ESP32
+> 3.3.11 / ESP-IDF 5.5.5) — deliberately the same core generation as the Arduino IDE
+> install. The ESP32-S3 bootloader has app rollback enabled: an OTA-flashed image needs
+> to come from the same core generation as the bootloader, or it fails to validate and
+> the bootloader silently reverts to the old partition on the very next reset, without
+> the new firmware ever running even once. With `pioarduino` pinned and a boot-time
+> self-confirmation (`esp_ota_mark_app_valid_cancel_rollback()` in `src/main.cpp`,
+> whenever the running partition is in "pending verify") OTA now works reliably —
+> confirmed across a real power cycle, more than once.
+
+**Browser-based upload:** the WebUI also has its own "Firmware-Update" section for
+uploading a `.bin` directly from a browser tab, no PlatformIO or Arduino IDE required.
+The `/update` endpoint is protected by HTTP Basic Auth — username `admin`
+(`OTA_USERNAME`), password `OTA_PASSWORD` (both in `include/config.h`). Enter the
+correct `OTA_PASSWORD` in the WebUI's password field and the upload goes through
+directly; if you hit `/update` without those credentials (or the field is empty/wrong),
+the browser itself pops up a native login prompt asking for username/password instead.
+Ready-to-flash binaries for this path live in the [`firmware/`](firmware/) directory —
+one `.bin` per `FIRMWARE_VERSION`, built automatically by every `pio run`.
 
 ## 🚀 Building & Uploading
 
@@ -322,7 +810,7 @@ If readings are consistently off:
 | No serial output | Wrong baud rate | Set to 115200 |
 | No LED response | Wrong LED pin | Verify GPIO 1 connection |
 | Microphone noise floor high | Electrical noise | Shield data lines, check power supply |
-| Device stuck on `NoiseLight` AP | Home WiFi unreachable/wrong password | Check credentials in the web UI, or reconnect to the AP and re-enter them |
+| Device stuck on `noiselight` AP | Home WiFi unreachable/wrong password | Check credentials in the web UI, or reconnect to the AP and re-enter them |
 | MQTT entities not appearing in Home Assistant | Broker unreachable or discovery not yet sent | Verify host/port/credentials in Network settings; discovery re-sends on every reconnect |
 | OTA upload fails/times out | Device on AP fallback, or wrong `--auth` password | Confirm device is on your home network (`noiselight.local` resolves) and `OTA_PASSWORD` matches `platformio.ini` |
 

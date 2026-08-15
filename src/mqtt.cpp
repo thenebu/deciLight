@@ -1,9 +1,12 @@
 #include "mqtt.h"
+#include "config.h"
 #include "net_manager.h"
 #include "web.h"
 #include "led.h"
 #include <ArduinoJson.h>
 #include <WiFi.h>
+#include <esp_system.h>
+#include <time.h>
 
 // Global instance
 MqttService mqtt_service;
@@ -14,6 +17,7 @@ MqttService::MqttService()
     applied_port(0),
     last_reconnect_attempt(0),
     last_state_publish(0),
+    last_debug_publish(0),
     discovery_sent(false)
 {
 }
@@ -45,6 +49,10 @@ String MqttService::topicState() const {
 
 String MqttService::topicAvailability() const {
   return "noiselight/" + deviceId() + "/availability";
+}
+
+String MqttService::topicDebug() const {
+  return "noiselight/" + deviceId() + "/debug";
 }
 
 void MqttService::loop() {
@@ -83,6 +91,10 @@ void MqttService::loop() {
     last_state_publish = now;
     publishState();
   }
+  if (now - last_debug_publish >= MQTT_DEBUG_INTERVAL_MS) {
+    last_debug_publish = now;
+    publishDebug();
+  }
 }
 
 void MqttService::reconnect() {
@@ -115,9 +127,9 @@ void MqttService::publishDiscovery() {
   JsonObject device = device_doc.to<JsonObject>();
   JsonArray idents = device.createNestedArray("identifiers");
   idents.add(id);
-  device["name"] = "Noise Light";
+  device["name"] = "noiselight";
   device["manufacturer"] = "deciLight";
-  device["model"] = "ESP32-S3 Noise Traffic Light";
+  device["model"] = "ESP32-S3 noiselight";
 
   {
     DynamicJsonDocument doc(768);
@@ -152,8 +164,185 @@ void MqttService::publishDiscovery() {
     client.publish(topic.c_str(), payload.c_str(), true);
   }
 
+  String debug_topic = topicDebug();
+
+  {
+    DynamicJsonDocument doc(768);
+    doc["name"] = "Firmware Version";
+    doc["unique_id"] = id + "_firmware";
+    doc["state_topic"] = debug_topic;
+    doc["availability_topic"] = avail_topic;
+    doc["value_template"] = "{{ value_json.firmware }}";
+    doc["icon"] = "mdi:chip";
+    doc["entity_category"] = "diagnostic";
+    doc["device"] = device;
+
+    String topic = "homeassistant/sensor/" + id + "/firmware/config";
+    String payload;
+    serializeJson(doc, payload);
+    client.publish(topic.c_str(), payload.c_str(), true);
+  }
+
+  {
+    DynamicJsonDocument doc(768);
+    doc["name"] = "Uptime";
+    doc["unique_id"] = id + "_uptime";
+    doc["state_topic"] = debug_topic;
+    doc["availability_topic"] = avail_topic;
+    doc["value_template"] = "{{ value_json.uptime_s }}";
+    doc["device_class"] = "duration";
+    doc["unit_of_measurement"] = "s";
+    doc["entity_category"] = "diagnostic";
+    doc["device"] = device;
+
+    String topic = "homeassistant/sensor/" + id + "/uptime/config";
+    String payload;
+    serializeJson(doc, payload);
+    client.publish(topic.c_str(), payload.c_str(), true);
+  }
+
+  {
+    DynamicJsonDocument doc(768);
+    doc["name"] = "Free Heap";
+    doc["unique_id"] = id + "_free_heap";
+    doc["state_topic"] = debug_topic;
+    doc["availability_topic"] = avail_topic;
+    doc["value_template"] = "{{ value_json.free_heap }}";
+    doc["unit_of_measurement"] = "B";
+    doc["state_class"] = "measurement";
+    doc["icon"] = "mdi:memory";
+    doc["entity_category"] = "diagnostic";
+    doc["device"] = device;
+
+    String topic = "homeassistant/sensor/" + id + "/free_heap/config";
+    String payload;
+    serializeJson(doc, payload);
+    client.publish(topic.c_str(), payload.c_str(), true);
+  }
+
+  {
+    DynamicJsonDocument doc(768);
+    doc["name"] = "WiFi Signal";
+    doc["unique_id"] = id + "_rssi";
+    doc["state_topic"] = debug_topic;
+    doc["availability_topic"] = avail_topic;
+    doc["value_template"] = "{{ value_json.rssi }}";
+    doc["device_class"] = "signal_strength";
+    doc["unit_of_measurement"] = "dBm";
+    doc["state_class"] = "measurement";
+    doc["entity_category"] = "diagnostic";
+    doc["device"] = device;
+
+    String topic = "homeassistant/sensor/" + id + "/rssi/config";
+    String payload;
+    serializeJson(doc, payload);
+    client.publish(topic.c_str(), payload.c_str(), true);
+  }
+
+  {
+    DynamicJsonDocument doc(768);
+    doc["name"] = "IP Address";
+    doc["unique_id"] = id + "_ip";
+    doc["state_topic"] = debug_topic;
+    doc["availability_topic"] = avail_topic;
+    doc["value_template"] = "{{ value_json.ip }}";
+    doc["icon"] = "mdi:ip-network";
+    doc["entity_category"] = "diagnostic";
+    doc["device"] = device;
+
+    String topic = "homeassistant/sensor/" + id + "/ip/config";
+    String payload;
+    serializeJson(doc, payload);
+    client.publish(topic.c_str(), payload.c_str(), true);
+  }
+
+  {
+    DynamicJsonDocument doc(768);
+    doc["name"] = "Last Reset Reason";
+    doc["unique_id"] = id + "_reset_reason";
+    doc["state_topic"] = debug_topic;
+    doc["availability_topic"] = avail_topic;
+    doc["value_template"] = "{{ value_json.reset_reason }}";
+    doc["icon"] = "mdi:restart-alert";
+    doc["entity_category"] = "diagnostic";
+    doc["device"] = device;
+
+    String topic = "homeassistant/sensor/" + id + "/reset_reason/config";
+    String payload;
+    serializeJson(doc, payload);
+    client.publish(topic.c_str(), payload.c_str(), true);
+  }
+
+  {
+    DynamicJsonDocument doc(768);
+    doc["name"] = "Letzter Alarm (Rot)";
+    doc["unique_id"] = id + "_last_alert";
+    doc["state_topic"] = debug_topic;
+    doc["availability_topic"] = avail_topic;
+    doc["value_template"] = "{{ value_json.last_alert_at if value_json.last_alert_at else None }}";
+    doc["device_class"] = "timestamp";
+    doc["icon"] = "mdi:alert-octagon";
+    doc["device"] = device;
+
+    String topic = "homeassistant/sensor/" + id + "/last_alert/config";
+    String payload;
+    serializeJson(doc, payload);
+    client.publish(topic.c_str(), payload.c_str(), true);
+  }
+
   discovery_sent = true;
   log_i("[MQTT] Discovery published for %s", id.c_str());
+}
+
+// Collapses the various watchdog-reset variants into one "watchdog" reason -
+// HA just needs a short human-readable diagnostic string, not the exact
+// WDT subsystem that fired.
+static const char* resetReasonToString(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_POWERON:   return "power-on";
+    case ESP_RST_EXT:       return "external";
+    case ESP_RST_SW:        return "software";
+    case ESP_RST_PANIC:     return "panic";
+    case ESP_RST_INT_WDT:
+    case ESP_RST_TASK_WDT:
+    case ESP_RST_WDT:       return "watchdog";
+    case ESP_RST_DEEPSLEEP: return "deepsleep";
+    case ESP_RST_BROWNOUT:  return "brownout";
+    case ESP_RST_SDIO:      return "sdio";
+    case ESP_RST_UNKNOWN:
+    default:                return "unknown";
+  }
+}
+
+// Formats an epoch as UTC ISO-8601 ("2026-08-15T12:34:56Z") for HA's
+// timestamp device_class, which expects an ISO-8601 string. 0 (never
+// triggered / not yet NTP-synced) yields "" so the discovery entity's
+// value_template can turn that into Jinja's None (shown as "unknown" in
+// HA) instead of rendering the 1970-01-01 epoch. Always UTC/"Z" regardless
+// of the device's configured POSIX TZ string - time_t itself is always UTC
+// seconds, so no tz_string handling is needed here.
+static String isoTimestamp(time_t epoch) {
+  if (epoch == 0) return "";
+  struct tm tm_utc;
+  gmtime_r(&epoch, &tm_utc);
+  char buf[21];  // "YYYY-MM-DDTHH:MM:SSZ" + NUL
+  strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &tm_utc);
+  return String(buf);
+}
+
+void MqttService::publishDebug() {
+  DynamicJsonDocument doc(320);
+  doc["firmware"] = FIRMWARE_VERSION;
+  doc["uptime_s"] = millis() / 1000;
+  doc["free_heap"] = ESP.getFreeHeap();
+  doc["rssi"] = WiFi.RSSI();
+  doc["ip"] = WiFi.localIP().toString();
+  doc["reset_reason"] = resetReasonToString(esp_reset_reason());
+  doc["last_alert_at"] = isoTimestamp(web_service.getLastAlertEpoch());
+
+  String payload;
+  serializeJson(doc, payload);
+  client.publish(topicDebug().c_str(), payload.c_str());
 }
 
 void MqttService::publishState() {
