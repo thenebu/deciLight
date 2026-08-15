@@ -70,7 +70,18 @@ public:
   // Thread-safe-by-construction accessors: NetworkSettings is only touched
   // from the web task (HTTP handlers run there, and init() itself runs
   // during setup() before other tasks exist), so no lock is needed.
-  NetworkSettings getSettings() const { return settings; }
+  //
+  // Returns a reference, NOT a copy. This used to return by value, which
+  // deep-copied six String members - i.e. up to six malloc/free pairs - on
+  // every call. MqttService::loop() calls it from the 50ms web-task loop,
+  // so that was ~120 heap operations per second, forever: the main driver
+  // of the slow free_heap decay from fragmentation.
+  //
+  // Callers that intend to MODIFY the settings (handleNetworkSet(),
+  // handleConfigImport()) must still take their own copy - writing
+  // `NetworkSettings s = network_service.getSettings();` does exactly that
+  // and remains correct.
+  const NetworkSettings& getSettings() const { return settings; }
 
   // Persists new_settings. Only reconnects WiFi (which briefly disrupts
   // connectivity/blocks the caller) if wifi_ssid/wifi_pass actually

@@ -26,6 +26,7 @@
 #include "net_manager.h"
 #include "mqtt.h"
 #include "web.h"
+#include "audio_stream.h"
 
 //
 // SETUP
@@ -143,9 +144,14 @@ void setup() {
   // task loop - see WebService::webTaskHandler())
   mqtt_service.init();
 
+  // Initialize the live-listen audio stream service (Babyphone Phase 2) -
+  // own dedicated task/port, independent of the WebService/WebTask above.
+  audio_stream.init();
+
   // Start RTOS tasks
   web_service.startTask();
-  
+  audio_stream.startTask();
+
   log_e("=== SYSTEM READY ===\n");
 }
 
@@ -164,10 +170,30 @@ void loop() {
   // Update web interface with current level
   web_service.updateLevel(level_dB);
 
-  // Track today's hour-of-day time distribution, using the same raw
-  // classification MqttService reuses for its "level" sensor - not the
-  // decayed/display level, which is a display-smoothing concern.
-  web_service.accumulateHourlyStat(led_controller.getLevelForDb(level_dB, config));
+  // The two statistics calls below are throttled rather than run on every
+  // iteration: accumulateHourlyStat() calls time() + localtime_r() (not
+  // cheap) and both work on elapsed-millisecond deltas, so a coarser tick
+  // costs them no accuracy - the Babyphone sustain/clear windows are
+  // measured in whole seconds. Unthrottled this ran thousands of times a
+  // second for no benefit.
+  static unsigned long last_stats_ms = 0;
+  unsigned long now = millis();
+  if (now - last_stats_ms >= 200) {
+    last_stats_ms = now;
 
-  yield();  // Allow FreeRTOS scheduler to run
+    // Track today's hour-of-day time distribution, using the same raw
+    // classification MqttService reuses for its "level" sensor - not the
+    // decayed/display level, which is a display-smoothing concern.
+    web_service.accumulateHourlyStat(led_controller.getLevelForDb(level_dB, config));
+
+    // Sustained-threshold Babyphone alarm detector (no-op unless
+    // display_mode == 2) - same tick, same raw dB input as the call above.
+    web_service.updateBabyphoneState(level_dB, config);
+  }
+
+  // A real delay, not just yield(): the microphone delivers one block every
+  // ~125ms, so polling at 200Hz is already ~25x oversampled. Spinning this
+  // task as fast as the scheduler allows only burned CPU (and power) on
+  // re-reading the same values.
+  delay(5);
 }

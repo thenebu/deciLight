@@ -24,6 +24,13 @@ struct Config {
   uint32_t color_alert;    // 0xRRGGBB
   uint16_t decay_ms;       // How long to hold color after sound (0-3000ms)
   uint16_t response_ms;    // Min time between LED updates (0-500ms)
+
+  // Babyphone mode (display_mode == 2) settings.
+  float babyphone_trigger_db;          // dB threshold that must be exceeded sustained
+  uint16_t babyphone_sustain_s;        // seconds in NVS/UI, converted to ms internally
+  uint16_t babyphone_clear_s;
+  uint32_t babyphone_night_color;      // 0xRRGGBB
+  uint8_t babyphone_night_brightness;  // 0-255
 };
 
 //
@@ -44,6 +51,18 @@ public:
   // write side in accumulateHourlyStat(). Used by MqttService for the
   // "last alert" HA timestamp sensor.
   time_t getLastAlertEpoch();
+
+  // Sustained-threshold state machine for Babyphone mode (display_mode ==
+  // 2). Called once per main-loop iteration (main.cpp), right next to
+  // accumulateHourlyStat(), with the raw (non-decayed) dB reading. No-ops
+  // (and resets to QUIET) when display_mode isn't 2. See web.cpp for the
+  // asymmetric-hysteresis rationale.
+  void updateBabyphoneState(double dB_current, const Config& config);
+
+  // Thread-safe snapshot of the current alarm state, guarded by hourly_mux
+  // like getLastAlertEpoch() above. Used by handleApiStatus() and
+  // MqttService for the HA binary_sensor.
+  bool getBabyphoneAlarmActive();
 
   // Accumulates time spent at `level` into the current hour's bucket for
   // today's hourly stats. Called once per main-loop iteration (main.cpp)
@@ -127,6 +146,14 @@ private:
   bool update_reboot_pending;
   unsigned long update_reboot_at_ms;
 
+  // Set at UPLOAD_FILE_START only once the request has authenticated AND
+  // Update.begin() has succeeded. WebServer keeps invoking the upload
+  // callback for every chunk of the multipart body regardless of what that
+  // first call decided, so without this flag a rejected upload still ran
+  // Update.write() per 2KB chunk - each failing and logging an error line,
+  // hundreds of them for a 1MB image.
+  bool update_started;
+
   TaskHandle_t task_handle;
   double suggested_floor = 0.0;  // 0 = no suggestion available yet (see setSuggestedFloor)
 
@@ -167,6 +194,16 @@ private:
   unsigned long last_hourly_flush_ms;  // throttles NVS writes
   bool hourly_dirty;
   portMUX_TYPE hourly_mux;
+
+  // Babyphone sustained-threshold state machine (see
+  // updateBabyphoneState() in web.cpp). Only ever touched by the single
+  // writer task (main loop, core 1), so no lock needed for these - only
+  // babyphone_alarm_active is read cross-core, guarded by hourly_mux above.
+  enum BabyphoneState { QUIET, ALARMED };
+  BabyphoneState babyphone_state = QUIET;
+  unsigned long babyphone_above_since_ms = 0;  // 0 = not currently above threshold
+  unsigned long babyphone_below_since_ms = 0;  // 0 = not currently below threshold
+  bool babyphone_alarm_active = false;         // externally read flag, guarded by hourly_mux
 };
 
 // Global instance

@@ -22,12 +22,19 @@ Ein Echtzeit-Lärmmonitor, der den Geräuschpegel als Ampel mit RGB-LEDs anzeigt
 - **A-bewertete Schallpegelmessung** (dBA) für eine realistische Wahrnehmung
 - **Konfigurierbare Schwellenwerte** über persistenten Speicher
 - **WiFi-Client-Modus** mit automatischem AP-Fallback für die Ersteinrichtung
+- **Babyphone-Modus** – warmes, dimmbares Nachtlicht am Gerät, während ein anhaltend
+  lauter Pegel (Auslöseschwelle + Halte-/Löschzeit mit Hysterese) einen Alarm
+  ausschließlich per MQTT an Home Assistant meldet; die LED selbst bleibt ruhig
+- **Live-Hören** – 16-kHz-PCM-Audiostream direkt im Browser, eigener TCP-Port, eigenes
+  Passwort, mit Auto-Gain, damit auch leise Geräusche hörbar sind
 - **MQTT- / Home-Assistant-Integration** mit MQTT-Discovery
 - **Over-the-Air (OTA) Firmware-Updates**, sobald das Gerät mit dem Heimnetzwerk verbunden ist — per PlatformIO/ArduinoOTA **oder** direkt per Datei-Upload im Web-UI, ganz ohne Entwicklungsumgebung
 - **Konfigurations-Export/Import** zum Sichern oder Klonen der Geräteeinstellungen
 - **5-Minuten-Verlaufsdiagramm** im Web-UI
 - **Firmware-Version** sichtbar im Web-UI-Footer und über MQTT (Diagnose-Topic mit Uptime, freiem Speicher, WLAN-Signalstärke, IP-Adresse und letztem Reset-Grund)
 - **"Letzter Alarm"-Zeitstempel** über MQTT (Home-Assistant-Timestamp-Entity, zeigt automatisch "vor X Minuten" an)
+- **Zwei getrennte Passwörter** – eins fürs Firmware-Flashen, eins fürs Live-Hören, damit
+  das Weitergeben des einen nicht das andere mit verschenkt
 
 ## 🛒 Verwendete Hardware
 
@@ -102,33 +109,53 @@ Partitionierung) sowie generische AVR-/STM32-Boards ohne ESP-IDF-Unterstützung.
 
 3. **Schallpegelberechnung**
    - Wandelt gefilterte Samples in dB (Dezibel) um
-   - Nutzt Mikrofonkalibrierung: Referenz 94 dB SPL
-   - LEQ (äquivalenter Dauerschallpegel) über 0,15-Sekunden-Blöcke
+   - Nutzt die Mikrofonkalibrierung aus `MIC_REF_DB`/`MIC_SENSITIVITY`
+   - **Messfenster: 125 ms** (`SAMPLES_SHORT` = 6000 Samples bei 48 kHz). Das ist
+     exakt die Zeitbewertung **"FAST" nach IEC 61672**, die auch jeder handelsübliche
+     Schallpegelmesser verwendet — deshalb ist der Wert nicht frei wählbar, ohne die
+     Kalibrierung zu entwerten
+   - Gelesen wird allerdings in **zwei 62,5-ms-Halbblöcken** (`SAMPLES_CHUNK`), deren
+     Quadratsummen addiert werden, bevor ein Messwert entsteht. Die IIR-Filter tragen
+     ihren Zustand über den Aufruf hinaus, das Ergebnis ist also bitgleich zu einem
+     durchgehenden 125-ms-Block — halbiert aber den Sample-Puffer von 24 KB auf 12 KB
+   - Anschließend exponentielle Glättung (α = 0,3 pro Fenster, Zeitkonstante ≈ 350 ms)
 
 4. **Entscheidungslogik**
    ```
-   if (Leq < dB_min)     → GREEN   (quiet)
-   if (dB_min ≤ Leq < dB_max) → YELLOW  (moderate)
-   if (Leq ≥ dB_max)     → RED     (loud)
+   if (dB < db_normal_switchover)      → GRÜN   (ruhig)
+   if (dB < db_warning_switchover)     → GELB   (laut)
+   sonst                               → ROT    (zu laut)
    ```
 
 ## 🎚️ Konfiguration
 
-### Standard-Schwellenwerte
+### Standardwerte
+
+Alle in `include/config.h`, zur Laufzeit über das Web-UI änderbar und im NVS persistent:
 
 ```cpp
-dB_min_default = 40   // Below 40 dB → GREEN
-dB_max_default = 60   // Above 60 dB → RED
+DB_FLOOR                   37.0   // Grundpegel (unteres Ende der VU-Skala)
+DB_NORMAL_SWITCHOVER       50.0   // darunter GRÜN, darüber GELB
+DB_WARNING_SWITCHOVER      65.0   // darunter GELB, darüber ROT
+LED_BRIGHTNESS               25   // 0-255
+DISPLAY_MODE                  1   // 0=Ampel, 1=VU-Meter, 2=Babyphone
+
+BABYPHONE_TRIGGER_DB       65.0   // Schwelle, die anhaltend überschritten werden muss
+BABYPHONE_SUSTAIN_MS       5000   // so lange darüber → Alarm
+BABYPHONE_CLEAR_MS         3000   // so lange darunter → Alarm gelöscht
+BABYPHONE_NIGHT_COLOR  0xFF3C00   // warmes Bernstein, fast ohne Blauanteil
+BABYPHONE_NIGHT_BRIGHTNESS   15   // 0-255, gedimmt
 ```
 
 ### Empfohlene Einstellungen
 
-| Umgebung | dB_min | dB_max | Hinweise |
+| Umgebung | Grün→Gelb | Gelb→Rot | Hinweise |
 |------------|--------|--------|-------|
 | Bibliothek/Ruhig | 30 | 50 | Sehr leise Räume |
 | Klassenzimmer | 40 | 60 | Normaler Unterricht |
 | Aktives Klassenzimmer | 45 | 70 | Gruppenarbeitsphasen |
 | Werkstatt | 60 | 80 | Toleriert Maschinenlärm |
+| Kinderzimmer (Babyphone) | 45 | 65 | Auslöseschwelle separat einstellen |
 
 ## 🌐 WiFi- und Web-Konfiguration
 
@@ -201,22 +228,47 @@ gegenüber dem `.env`-Standard.
 **Anzeigemodus**
 - **Ampel:** Alle LEDs zeigen eine einzelne Farbe (GRÜN/GELB/ROT)
 - **VU-Meter:** LEDs bilden einen Verlaufsbalken, der die Geräuschintensität zeigt
+- **Babyphone:** Der Streifen ist ein statisches, warmes Nachtlicht und reagiert
+  bewusst *nicht* auf Geräusche. Der Alarm läuft ausschließlich über MQTT — die
+  Beleuchtung im Kinderzimmer soll nicht blinken, wenn das Kind weint
+
+**Live hören**
+- Eigene Karte direkt unter der Pegelanzeige, in **jedem** Anzeigemodus verfügbar
+- Streamt 16-kHz-PCM-Mono über einen eigenen TCP-Port (8081, `AUDIO_STREAM_PORT`) und
+  spielt es über die Web-Audio-API im Browser ab
+- Geschützt durch `LIVE_PASSWORD` — nicht durch das OTA-Passwort (siehe
+  **Passwörter** weiter unten). Optional per Häkchen im Browser merkbar
+- Ein Auto-Gain skaliert jeden Block auf einen Zielpegel (Attack sofort, Release
+  verzögert), weil das Mikrofon für *Messgenauigkeit* kalibriert ist und ein leises
+  Wimmern sonst kaum hörbar wäre
+- Jeweils nur ein Zuhörer gleichzeitig; ein zweiter Verbindungsversuch wird mit
+  "503 stream busy" abgewiesen. Der Ringpuffer wird erst beim Verbinden alloziert
+  und beim Trennen wieder freigegeben
 
 **LED-Einstellungen**
-- **Helligkeit:** 0–255 (Standard: 57)
+- **Helligkeit:** 0–255 (Standard: 25)
 - **Farbauswahl:** Individuelle Farben für jede Lärmstufe wählen
 
 **Umschaltpunkte (dB)**
-- **Floor Level:** Geräusch-Grundpegel (Standard: 37 dB)
-- **Grün→Gelb:** Übergangsschwelle (Standard: 52 dB)
-- **Gelb→Rot:** Alarmschwelle (Standard: 62 dB)
+- **Grundpegel:** Geräusch-Grundpegel (Standard: 37 dB)
+- **Grün→Gelb:** Übergangsschwelle (Standard: 50 dB)
+- **Gelb→Rot:** Alarmschwelle (Standard: 65 dB)
 - **Farbvorschau:** Visueller Balken zeigt LED-Farben über den dB-Bereich
 
 **Reaktionszeiten**
-- **Decay Time:** Wie lange die aktuelle Farbe gehalten wird, nachdem der Ton
-  aufgehört hat (0–3000 ms, Standard: 2400 ms)
-- **Response Time:** Minimales Aktualisierungsintervall zwischen LED-Wechseln
-  (0–500 ms, Standard: 50 ms)
+- **Nachleuchten:** Wie lange die aktuelle Farbe gehalten wird, nachdem der Ton
+  aufgehört hat (0–3000 ms, Standard: 1500 ms)
+- **Ansprechzeit:** Minimales Aktualisierungsintervall zwischen LED-Wechseln
+  (0–500 ms, Standard: 100 ms). Gilt für Ampel *und* VU-Meter; letzteres hat
+  zusätzlich eine harte Untergrenze von 20 ms, weil ein WS2812-Streifen darüber
+  hinaus ohnehin nicht sinnvoll aktualisiert werden kann
+
+**Babyphone-Einstellungen**
+- **Auslöseschwelle** (dB), **Anhaltend für** (s) und **Löscht nach** (s) bilden einen
+  Zustandsautomaten mit asymmetrischer Hysterese: der Alarm feuert erst nach einer
+  ununterbrochen lauten Phase und löscht sich erst nach einer ununterbrochen leisen —
+  ein kurzes Luftholen zwischen zwei Schreien setzt also nichts zurück
+- **Nachtlicht-Farbe** und **-Helligkeit** für den Streifen in diesem Modus
 
 **Verlaufsdiagramm**
 - Live-Liniendiagramm der letzten 5 Minuten der dB-Messwerte (1 Sample/Sek.), bereitgestellt
@@ -277,22 +329,60 @@ anmelden — keine manuelle Entitätskonfiguration nötig.
 
 1. Trage im Bereich **Network** des Web-UI Host/Port deines MQTT-Brokers ein sowie,
    falls erforderlich, Benutzername/Passwort, und speichere.
-2. Das Gerät verbindet sich automatisch und veröffentlicht ein
-   Home-Assistant-Discovery-Payload unter `homeassistant/sensor/<device-id>/...`, das
-   zwei Entitäten bereitstellt:
+2. Das Gerät verbindet sich automatisch und meldet sich per Discovery unter
+   `homeassistant/<component>/<device-id>/...` an. Auf dem schnellen State-Topic
+   (alle ~2 Sekunden, `noiselight/<device-id>/state`):
    - **Noise Level** – der aktuelle dB-Messwert, auf eine ganze Zahl gerundet
    - **Noise Level Status** – `normal` / `warning` / `alert`
-3. Der Status wird alle ~2 Sekunden an `noiselight/<device-id>/state` veröffentlicht,
-   mit einem Verfügbarkeits-Topic (`.../availability`), sodass Home Assistant das Gerät
-   als offline markiert, wenn die Verbindung abbricht.
-4. Ein zusätzliches Diagnose-Topic (`noiselight/<device-id>/debug`, alle 60 Sekunden)
-   liefert Firmware-Version, Uptime, freien Heap, WLAN-Signalstärke, IP-Adresse und
-   letzten Reset-Grund als eigene "diagnostic"-Entitäten in Home Assistant, plus einen
-   Zeitstempel-Sensor "Letzter Alarm (Rot)", der automatisch anzeigt, wie lange der
-   letzte Alarm-Zustand her ist.
+   - **Anzeigemodus** – `traffic_light` / `vu_meter` / `babyphone`
+   - **Babyphone Alarm** – `binary_sensor` (`device_class: sound`), spiegelt den
+     Zustandsautomaten aus dem Babyphone-Modus. Bewusst auf dem 2-Sekunden-Topic und
+     nicht bei der Diagnose, damit ein Alarm schnell in HA ankommt
+3. Ein Verfügbarkeits-Topic (`.../availability`) sorgt dafür, dass Home Assistant das
+   Gerät als offline markiert, wenn die Verbindung abbricht.
+4. Ein Diagnose-Topic (`noiselight/<device-id>/debug`, alle 60 Sekunden) liefert als
+   eigene "diagnostic"-Entitäten:
+   - **Firmware Version**, **Uptime**, **WiFi Signal**, **IP Address**,
+     **Last Reset Reason**
+   - **Free Heap** – Summe *aller* freien Bytes
+   - **Largest Free Block** – größter *zusammenhängender* Block. Zusammen mit Free Heap
+     auf einer Karte macht das Fragmentierung sichtbar: bleibt Free Heap flach, während
+     dieser Wert über Tage absackt, stanzt irgendwo eine malloc/free-Schleife Löcher in
+     den Heap
+   - **Letzter Alarm (Rot)** – Zeitstempel-Sensor, der automatisch anzeigt, wie lange
+     der letzte Alarm-Zustand her ist
 
 Die Geräte-ID wird aus den letzten 6 Hex-Ziffern der MAC-Adresse abgeleitet (z. B.
 `noiselight-a1b2c3`).
+
+## 🔑 Passwörter
+
+Die Firmware kennt **zwei getrennte Zugangsdaten** (beide in `include/config.h`):
+
+| Define | Standard | Schützt |
+|---|---|---|
+| `OTA_PASSWORD` | `changeme-ota` | ArduinoOTA (Flashen per PlatformIO/IDE) **und** `POST /update` im Web-UI |
+| `LIVE_PASSWORD` | `changeme-live` | Live-Hören auf Port 8081 (`/listen`) |
+
+Dazu `OTA_USERNAME` und `LIVE_USERNAME` (beide `admin`) für die HTTP-Basic-Auth der
+zwei Endpunkte; ArduinoOTA selbst prüft nur das Passwort.
+
+Warum getrennt: Firmware flashen kann das Gerät unbrauchbar machen und sollte bei dem
+bleiben, der es wartet. Ins Zimmer hören ist dagegen eine Alltagshandlung für alle im
+Haushalt — und die, die man um drei Uhr nachts halbwach auf dem Handy eintippt. Das
+Live-Passwort weiterzugeben darf nicht bedeuten, das Recht zum Neuflashen mitzuverschenken.
+
+> ⚠️ **Beide Standardwerte vor dem Einsatz im Heimnetz ändern.** Sie stehen im Klartext
+> in diesem öffentlichen Repository.
+
+Nur das Live-Passwort lässt sich im Browser per Häkchen "Auf diesem Gerät merken"
+speichern (`localStorage`, im Klartext, gebunden an die Adresse des Geräts). Für das
+OTA-Passwort gibt es diese Option bewusst nicht.
+
+> **Hinweis:** Das Web-UI baut seine `Authorization`-Header in JavaScript, und dieser
+> Code ist ein String-Literal in `src/web.cpp` — er sieht die `#define`s nicht. Die
+> *Benutzernamen* stehen dort ein zweites Mal. Änderst du einen davon, musst du ihn an
+> beiden Stellen ändern.
 
 ## 📡 OTA-Updates (Over-the-Air)
 
@@ -361,6 +451,43 @@ platformio run -t upload -e esp32-s3-devkitc1-n4r2-ota
 
 # Or in VS Code: Ctrl+Shift+B → Upload
 ```
+
+## 🏷️ Versionierung und Releases
+
+`FIRMWARE_VERSION` in `include/config.h` ist die einzige Quelle der Wahrheit. Der Wert
+ist im Web-UI-Footer sichtbar, wird über MQTT als Diagnose-Sensor veröffentlicht und
+benennt die Binärdatei: jedes `pio run` legt automatisch
+`firmware/noiselight-<version>.bin` ab (siehe `copy_firmware_bin.py`). So lässt sich
+nach einem OTA-Update zweifelsfrei prüfen, ob die neue Firmware wirklich läuft.
+
+**Semantik** (locker nach SemVer): Patch für Fehlerbehebungen und interne Optimierungen,
+Minor für neue Funktionen oder sichtbare UI-Änderungen.
+
+**Release-Ablauf** — Git-Tag und `FIRMWARE_VERSION` bleiben synchron, das Tag heißt wie
+die Version mit `v` davor:
+
+```bash
+# 1. FIRMWARE_VERSION in include/config.h anheben
+# 2. Bauen - erzeugt firmware/noiselight-<version>.bin
+pio run -e esp32-s3-devkitc1-n4r2
+
+# 3. Committen, taggen, pushen
+git commit -am "feat: ..."
+git tag -a v1.6.0 -m "noiselight 1.6.0"
+git push origin master --follow-tags
+
+# 4. GitHub-Release mit der Binärdatei als Asset
+gh release create v1.6.0 firmware/noiselight-1.6.0.bin \
+   --repo thenebu/noiselight \
+   --title "noiselight 1.6.0" --notes-file RELEASE_NOTES.md
+```
+
+Die angehängte `.bin` ist genau die Datei, die im Web-UI unter **Firmware aktualisieren**
+hochgeladen werden kann — damit lässt sich ein Gerät aktualisieren, ohne das Repository
+auszuchecken oder eine Entwicklungsumgebung zu installieren.
+
+> `--repo` ist hier nicht optional: dieses Arbeitsverzeichnis hat mehrere Remotes, und
+> `gh` würde sonst das Upstream-Repository ansprechen statt des eigenen Forks.
 
 ## 📈 Serielle Ausgabe
 
@@ -443,12 +570,19 @@ A real-time noise monitor that displays sound levels as a traffic light using RG
 - **A-weighted sound level measurement** (dBA) for realistic perception
 - **Configurable thresholds** via persistent storage
 - **WiFi client mode** with automatic AP fallback for first-time setup
+- **Babyphone mode** – a warm, dimmable night light on the device while a sustained
+  loud level (trigger threshold plus hold/clear times with hysteresis) raises an alarm
+  over MQTT to Home Assistant only; the LED itself stays calm
+- **Live listening** – 16 kHz PCM audio stream straight in the browser, on its own TCP
+  port with its own password, auto-gained so quiet sounds are audible too
 - **MQTT / Home Assistant integration** with MQTT discovery
 - **Over-the-air (OTA) firmware updates** once connected to your home network — via PlatformIO/ArduinoOTA **or** a direct file upload in the web UI, no dev tooling required
 - **Config export/import** for backing up or cloning device settings
 - **5-minute history graph** in the web UI
 - **Firmware version** visible in the web UI footer and over MQTT (a diagnostics topic with uptime, free heap, WiFi signal strength, IP address, and last reset reason)
 - **"Last alert" timestamp** over MQTT (a Home Assistant timestamp entity that automatically renders "X minutes ago")
+- **Two separate passwords** – one for flashing firmware, one for live listening, so
+  handing out the one does not give away the other
 
 ## 🛒 Hardware Used
 
@@ -521,33 +655,53 @@ partitioning) or generic AVR/STM32 boards without ESP-IDF support.
 
 3. **Sound Level Calculation**
    - Converts filtered samples to dB (decibels)
-   - Uses microphone calibration: 94 dB SPL reference
-   - LEQ (Equivalent Continuous Sound Level) over 0.15 second blocks
+   - Uses the microphone calibration from `MIC_REF_DB`/`MIC_SENSITIVITY`
+   - **Measurement window: 125 ms** (`SAMPLES_SHORT` = 6000 samples at 48 kHz). That is
+     exactly the **"FAST" time weighting defined by IEC 61672**, which every commercial
+     sound level meter uses — so it is not a free parameter without invalidating the
+     calibration
+   - It is *read*, however, in **two 62.5 ms half blocks** (`SAMPLES_CHUNK`) whose sums
+     of squares are accumulated before a measurement is emitted. The IIR filters carry
+     their state across calls, so the result is bit-for-bit identical to one continuous
+     125 ms block — while halving the sample buffer from 24 KB to 12 KB
+   - Then exponential smoothing (α = 0.3 per window, time constant ≈ 350 ms)
 
 4. **Decision Logic**
    ```
-   if (Leq < dB_min)     → GREEN   (quiet)
-   if (dB_min ≤ Leq < dB_max) → YELLOW  (moderate)
-   if (Leq ≥ dB_max)     → RED     (loud)
+   if (dB < db_normal_switchover)      → GREEN   (quiet)
+   if (dB < db_warning_switchover)     → YELLOW  (loud)
+   else                                → RED     (too loud)
    ```
 
 ## 🎚️ Configuration
 
-### Default Thresholds
+### Defaults
+
+All in `include/config.h`, changeable at runtime through the web UI and persisted in NVS:
 
 ```cpp
-dB_min_default = 40   // Below 40 dB → GREEN
-dB_max_default = 60   // Above 60 dB → RED
+DB_FLOOR                   37.0   // floor level (bottom of the VU scale)
+DB_NORMAL_SWITCHOVER       50.0   // below GREEN, above YELLOW
+DB_WARNING_SWITCHOVER      65.0   // below YELLOW, above RED
+LED_BRIGHTNESS               25   // 0-255
+DISPLAY_MODE                  1   // 0=traffic light, 1=VU meter, 2=babyphone
+
+BABYPHONE_TRIGGER_DB       65.0   // threshold that must be exceeded continuously
+BABYPHONE_SUSTAIN_MS       5000   // that long above it → alarm
+BABYPHONE_CLEAR_MS         3000   // that long below it → alarm cleared
+BABYPHONE_NIGHT_COLOR  0xFF3C00   // warm amber, almost no blue
+BABYPHONE_NIGHT_BRIGHTNESS   15   // 0-255, dimmed
 ```
 
 ### Recommended Settings
 
-| Environment | dB_min | dB_max | Notes |
+| Environment | Green→Yellow | Yellow→Red | Notes |
 |------------|--------|--------|-------|
 | Library/Silent | 30 | 50 | Very quiet spaces |
 | Classroom | 40 | 60 | Normal teaching |
 | Active classroom | 45 | 70 | Group work sessions |
 | Workshop | 60 | 80 | Tolerate machinery |
+| Nursery (babyphone) | 45 | 65 | Set the trigger threshold separately |
 
 ## 🌐 WiFi & Web Configuration
 
@@ -615,20 +769,44 @@ NVS-stored value always wins over the `.env` default.
 **Display Mode**
 - **Traffic Light:** All LEDs show single color (GREEN/YELLOW/RED)
 - **VU Meter:** LEDs create gradient bar showing sound intensity
+- **Babyphone:** The strip is a static, warm night light and deliberately does *not*
+  react to sound. The alarm goes out over MQTT only — the light in a child's room
+  should not start flashing because the child is crying
+
+**Live Listening**
+- Its own card right below the level readout, available in **every** display mode
+- Streams 16 kHz mono PCM over a dedicated TCP port (8081, `AUDIO_STREAM_PORT`) and
+  plays it back through the browser's Web Audio API
+- Guarded by `LIVE_PASSWORD` — not the OTA password (see **Passwords** below).
+  Optionally remembered in the browser via a checkbox
+- An auto-gain scales each block to a target level (instant attack, delayed release),
+  because the microphone is calibrated for *measurement accuracy* and a quiet whimper
+  would otherwise be barely audible
+- One listener at a time; a second connection attempt is rejected with "503 stream
+  busy". The ring buffer is allocated on connect and released on disconnect
 
 **LED Settings**
-- **Brightness:** 0–255 (default: 57)
+- **Brightness:** 0–255 (default: 25)
 - **Color Selection:** Choose custom colors for each noise level
 
 **Switchover Points (dB)**
 - **Floor Level:** Noise floor baseline (default: 37 dB)
-- **Green→Yellow:** Transition threshold (default: 52 dB)
-- **Yellow→Red:** Alert threshold (default: 62 dB)
+- **Green→Yellow:** Transition threshold (default: 50 dB)
+- **Yellow→Red:** Alert threshold (default: 65 dB)
 - **Color Preview:** Visual bar shows LED colors across dB range
 
 **Response Timing**
-- **Decay Time:** How long to hold current color after sound stops (0–3000 ms, default: 2400 ms)
-- **Response Time:** Minimum update interval between LED changes (0–500 ms, default: 50 ms)
+- **Decay Time:** How long to hold current color after sound stops (0–3000 ms, default: 1500 ms)
+- **Response Time:** Minimum update interval between LED changes (0–500 ms, default: 100 ms).
+  Applies to traffic light *and* VU meter; the latter additionally has a hard 20 ms floor,
+  since a WS2812 strip cannot usefully be refreshed faster than that anyway
+
+**Babyphone Settings**
+- **Trigger level** (dB), **Sustained for** (s) and **Clears after** (s) form a state
+  machine with asymmetric hysteresis: the alarm only fires after an uninterrupted loud
+  phase and only clears after an uninterrupted quiet one — so a breath between two
+  cries resets nothing
+- **Night light colour** and **brightness** for the strip in this mode
 
 **History Graph**
 - Live line chart of the last 5 minutes of dB readings (1 sample/sec), served from `/api/history`
@@ -682,21 +860,58 @@ entity configuration needed.
 
 1. In the web UI's **Network** section, enter your MQTT broker's host/port and,
    if required, username/password, then save.
-2. The device connects automatically and publishes a Home Assistant discovery payload
-   on `homeassistant/sensor/<device-id>/...`, exposing two entities:
+2. The device connects automatically and announces itself via discovery on
+   `homeassistant/<component>/<device-id>/...`. On the fast state topic (every ~2
+   seconds, `noiselight/<device-id>/state`):
    - **Noise Level** – the current dB reading, rounded to a whole number
    - **Noise Level Status** – `normal` / `warning` / `alert`
-3. State is published every ~2 seconds to `noiselight/<device-id>/state`, with an
-   availability topic (`.../availability`) so Home Assistant marks the device offline
-   if the connection drops.
-4. An additional diagnostics topic (`noiselight/<device-id>/debug`, every 60 seconds)
-   publishes firmware version, uptime, free heap, WiFi signal strength, IP address,
-   and last reset reason as their own "diagnostic" entities in Home Assistant, plus a
-   "Last Red Trigger" timestamp sensor that automatically shows how long ago the last
-   alert state was.
+   - **Anzeigemodus** – `traffic_light` / `vu_meter` / `babyphone`
+   - **Babyphone Alarm** – a `binary_sensor` (`device_class: sound`) mirroring the
+     babyphone state machine. Deliberately on the 2-second topic rather than with the
+     diagnostics, so an alarm reaches HA quickly
+3. An availability topic (`.../availability`) makes Home Assistant mark the device
+   offline if the connection drops.
+4. A diagnostics topic (`noiselight/<device-id>/debug`, every 60 seconds) publishes,
+   each as its own "diagnostic" entity:
+   - **Firmware Version**, **Uptime**, **WiFi Signal**, **IP Address**,
+     **Last Reset Reason**
+   - **Free Heap** – the sum of *all* free bytes
+   - **Largest Free Block** – the largest *contiguous* one. Charted together with Free
+     Heap this makes fragmentation visible: if Free Heap stays flat while this one sinks
+     over days, some malloc/free loop is punching holes in the heap
+   - **Letzter Alarm (Rot)** – timestamp sensor that automatically shows how long ago
+     the last alert state was
 
 The device ID is derived from the last 6 hex digits of its MAC address (e.g.
 `noiselight-a1b2c3`).
+
+## 🔑 Passwords
+
+The firmware uses **two separate credentials** (both in `include/config.h`):
+
+| Define | Default | Guards |
+|---|---|---|
+| `OTA_PASSWORD` | `changeme-ota` | ArduinoOTA (flashing from PlatformIO/IDE) **and** `POST /update` in the web UI |
+| `LIVE_PASSWORD` | `changeme-live` | Live listening on port 8081 (`/listen`) |
+
+Plus `OTA_USERNAME` and `LIVE_USERNAME` (both `admin`) for the two endpoints' HTTP
+Basic Auth; ArduinoOTA itself only checks the password.
+
+Why they are separate: flashing firmware can brick the device and should stay with
+whoever maintains it. Listening to the room is an everyday action for everyone in the
+household — and the one you type half asleep on a phone at 3am. Sharing the live
+password must not also hand out the ability to reflash the device.
+
+> ⚠️ **Change both defaults before deploying on your home network.** They are in
+> plain text in this public repository.
+
+Only the live password can be remembered in the browser, via the "Remember on this
+device" checkbox (`localStorage`, in the clear, scoped to the device's address). The
+OTA password deliberately has no such option.
+
+> **Note:** The web UI builds its `Authorization` headers in JavaScript, and that code
+> is a string literal inside `src/web.cpp` — it cannot see the `#define`s. The
+> *usernames* are repeated there. If you change either, change it in both places.
 
 ## 📡 OTA (Over-the-Air) Updates
 
@@ -762,6 +977,43 @@ platformio run -t upload -e esp32-s3-devkitc1-n4r2-ota
 
 # Or in VS Code: Ctrl+Shift+B → Upload
 ```
+
+## 🏷️ Versioning & Releases
+
+`FIRMWARE_VERSION` in `include/config.h` is the single source of truth. It is shown in
+the web UI footer, published over MQTT as a diagnostic sensor, and names the binary:
+every `pio run` drops `firmware/noiselight-<version>.bin` automatically (see
+`copy_firmware_bin.py`). That makes it verifiable after an OTA update whether the new
+firmware is actually running.
+
+**Semantics** (loosely SemVer): patch for bug fixes and internal optimisations, minor
+for new features or visible UI changes.
+
+**Release flow** — the git tag and `FIRMWARE_VERSION` stay in sync, the tag being the
+version with a `v` prefix:
+
+```bash
+# 1. Bump FIRMWARE_VERSION in include/config.h
+# 2. Build - produces firmware/noiselight-<version>.bin
+pio run -e esp32-s3-devkitc1-n4r2
+
+# 3. Commit, tag, push
+git commit -am "feat: ..."
+git tag -a v1.6.0 -m "noiselight 1.6.0"
+git push origin master --follow-tags
+
+# 4. GitHub release with the binary attached
+gh release create v1.6.0 firmware/noiselight-1.6.0.bin \
+   --repo thenebu/noiselight \
+   --title "noiselight 1.6.0" --notes-file RELEASE_NOTES.md
+```
+
+The attached `.bin` is exactly the file you upload under **Firmware aktualisieren** in
+the web UI — so a device can be updated without checking out the repository or
+installing a toolchain.
+
+> `--repo` is not optional here: this working copy has several remotes, and `gh` would
+> otherwise target the upstream repository instead of your own fork.
 
 ## 📈 Serial Output
 

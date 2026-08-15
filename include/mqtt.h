@@ -45,10 +45,19 @@ private:
   void publishDiscovery();
   void publishState();
   void publishDebug();
-  String deviceId() const;   // noiselight-<last 6 hex of MAC>
-  String topicState() const;
-  String topicAvailability() const;
-  String topicDebug() const;
+
+  // Builds device_id/topic_* once and caches them. They derive only from the
+  // MAC address, which never changes at runtime, but deviceId() used to
+  // rebuild them from WiFi.macAddress() on every call - and topicState() is
+  // called every MQTT_STATE_INTERVAL_MS, each time allocating and freeing
+  // half a dozen temporary Strings.
+  void ensureTopics();
+
+  String device_id;         // noiselight-<last 6 hex of MAC>
+  String topic_state;
+  String topic_availability;
+  String topic_debug;
+  bool topics_cached;
 
   WiFiClient wifi_client;
   PubSubClient client;

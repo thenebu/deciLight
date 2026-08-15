@@ -53,14 +53,41 @@ enum NoiseLevel {
 #define DB_WARNING_SWITCHOVER 65.0  // Below: WARNING, Above: ALERT
 
 //
+// BABYPHONE MODE
+//
+#define BABYPHONE_TRIGGER_DB 65.0        // dB threshold that must be exceeded sustained
+#define BABYPHONE_SUSTAIN_MS 5000        // how long above threshold before the alarm fires
+#define BABYPHONE_CLEAR_MS 3000          // how long below threshold before the alarm clears
+#define BABYPHONE_NIGHT_COLOR 0xFF3C00   // very warm amber/candlelight (almost no blue)
+#define BABYPHONE_NIGHT_BRIGHTNESS 15    // 0-255, dimmed base brightness
+
+//
 // MICROPHONE CONFIGURATION
 //
 #define SAMPLE_RATE 48000       // Hz
 #define SAMPLE_BITS 32          // bits
 #define SAMPLE_T int32_t
-// Each I2S block is used directly as the measurement window (no separate
-// LEQ accumulation across blocks).
-#define SAMPLES_SHORT (SAMPLE_RATE / 8)  // ~125ms blocks
+// MEASUREMENT WINDOW: 6000 samples = 125ms. One dB value is produced per
+// window. 125ms is not arbitrary - it is the "FAST" time weighting defined by
+// IEC 61672, which is what every sound level meter (including the phone app
+// MIC_REF_DB was calibrated against) uses. Changing it would invalidate that
+// calibration and, because smoothLevel()'s alpha is applied once per window,
+// would silently halve or double the display's effective time constant.
+#define SAMPLES_SHORT (SAMPLE_RATE / 8)
+
+// I/O BLOCK: how much is read from I2S - and therefore buffered in RAM - at
+// a time. Deliberately HALF the measurement window: the equalizer/A-weighting
+// filters carry their state across calls (see SOS_IIR_Filter_Cpp::state_ in
+// sos-iir-filter.h), so feeding them two 62.5ms halves back-to-back produces
+// bit-for-bit the same output as one 125ms block. i2sReaderTask() accumulates
+// the sum-of-squares over both halves and only then emits a measurement, so
+// the window above stays exactly 125ms while the sample buffer costs half the
+// RAM (12KB instead of 24KB, plus 2KB on the live-listen chunk).
+//
+// Must divide SAMPLES_SHORT evenly, and SAMPLES_CHUNK must stay divisible by
+// the live-listen decimation factor of 3 (6000 -> 3000 -> 1000, both exact).
+#define SAMPLES_CHUNK (SAMPLES_SHORT / 2)
+#define SAMPLES_CHUNKS_PER_WINDOW (SAMPLES_SHORT / SAMPLES_CHUNK)
 #define DMA_BANK_SIZE 256       // ~24 KB total DMA RAM instead of ~96 KB
 #define DMA_BANKS 12
 
@@ -84,12 +111,40 @@ constexpr double MIC_REF_AMPL = pow(10, double(MIC_SENSITIVITY) / 20) * ((1 << (
 #define I2S_TASK_STACK 8192
 
 //
-// OTA UPDATES
+// AUDIO STREAMING (Babyphone Phase 2: "Live hoeren")
 //
-// CHANGE THIS before deploying to your home network - anyone on the same
-// network can attempt an OTA flash otherwise. ArduinoOTA only enables once
-// WiFi STA is connected (see NetworkService::init()), so the AP-fallback
-// path never exposes this.
+// Dedicated raw-TCP port for the live-listen PCM stream - deliberately NOT
+// sharing the WebServer's port 80 / WebTask (see include/audio_stream.h for
+// the full rationale: no WebSocket/AsyncTCP dependency in this project).
+#define AUDIO_STREAM_PORT 8081
+#define AUDIO_STREAM_SAMPLE_RATE 16000   // downsampled from the mic's 48kHz
+// 1s (was 2s): the ring only has to bridge network hiccups between the mic
+// task's 125ms blocks and the stream task's 20ms drain loop, and every
+// buffered second is a second of added listening latency. Halving it halves
+// the allocation, which matters most on the internal-SRAM fallback path in
+// AudioStreamService::acquireRing().
+#define AUDIO_STREAM_RING_SECONDS 1
+#define AUDIO_STREAM_RING_BYTES (AUDIO_STREAM_SAMPLE_RATE * 2 * AUDIO_STREAM_RING_SECONDS)  // 16-bit mono
+
+//
+// CREDENTIALS
+//
+// Two separate passwords, deliberately not one shared secret: they guard
+// very different things and are handed out to different people. Flashing new
+// firmware can brick or replace the device outright, so that credential
+// should stay with whoever maintains it. Listening in on the room is an
+// everyday action for everyone in the household - and it is the one you type
+// on a phone, half asleep, when the baby cries. Sharing the live password
+// must not also hand out the ability to reflash the device.
+//
+// CHANGE BOTH before deploying to your home network - anyone on the same
+// network can otherwise attempt an OTA flash or listen in.
+//
+
+// Guards ArduinoOTA (network flashing from the IDE/PlatformIO) and the web
+// UI's POST /update endpoint. ArduinoOTA only enables once WiFi STA is
+// connected (see NetworkService::init()), so the AP-fallback path never
+// exposes it.
 //
 // If you change it, also update the matching --auth= value in
 // platformio.ini's esp32-s3-devkitc1-n4r2-ota env - PlatformIO can't read
@@ -97,15 +152,24 @@ constexpr double MIC_REF_AMPL = pow(10, double(MIC_SENSITIVITY) / 20) * ((1 << (
 // check keeping them in sync.
 #define OTA_PASSWORD "changeme-ota"
 
-// Username paired with OTA_PASSWORD for the web /update endpoint's HTTP
-// Basic Auth (in addition to being paired with OTA_PASSWORD for
-// ArduinoOTA, which only checks the password - ArduinoOTA itself doesn't
-// need a username, this define is purely for the web endpoint).
+// Guards the live-listen audio stream on AUDIO_STREAM_PORT (see
+// AudioStreamService::readHeadersAndCheckAuth()).
+#define LIVE_PASSWORD "changeme-live"
+
+// Usernames paired with the two passwords above for HTTP Basic Auth.
+// ArduinoOTA itself checks only a password and ignores these; they exist for
+// the two HTTP endpoints (/update on port 80, /listen on AUDIO_STREAM_PORT).
+//
+// NOTE: the embedded web UI builds its Authorization headers in JavaScript
+// (html_ui in web.cpp), which cannot see these #defines - the usernames are
+// repeated as literals there. If you change either one, change it in both
+// places, or the browser will be rejected with a 401.
 #define OTA_USERNAME "admin"
+#define LIVE_USERNAME "admin"
 
 // Manually bumped on each release - not tied to git/build automatically.
 // Shown in the WebUI footer and published over MQTT, so an OTA update can
 // be confirmed to have actually taken.
-#define FIRMWARE_VERSION "1.3.1"
+#define FIRMWARE_VERSION "1.6.0"
 
 #endif // CONFIG_H

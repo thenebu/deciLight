@@ -49,8 +49,9 @@ private:
 // Global instance
 extern Microphone microphone;
 
-// Global buffers for I2S reader task
-extern float samples[SAMPLES_SHORT];
+// Global buffer for the I2S reader task. Holds ONE I/O block
+// (SAMPLES_CHUNK), not a whole measurement window - see config.h.
+extern float samples[SAMPLES_CHUNK];
 extern QueueHandle_t samples_queue;
 
 #endif // MICROPHONE_H

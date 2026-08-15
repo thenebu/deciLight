@@ -11,9 +11,6 @@
 // Global instance
 WebService web_service;
 
-// Static pointer for task wrapper (allows access to instance)
-static WebService* g_web_service = nullptr;
-
 // Forward declaration of static HTML UI
 extern const char* html_ui;
 
@@ -28,6 +25,7 @@ WebService::WebService()
     network_settings_pending(false),
     update_reboot_pending(false),
     update_reboot_at_ms(0),
+    update_started(false),
     task_handle(nullptr),
     config_mux(portMUX_INITIALIZER_UNLOCKED),
     dB_mux(portMUX_INITIALIZER_UNLOCKED),
@@ -54,7 +52,12 @@ WebService::WebService()
     .color_warning = 0xFFFF00,
     .color_alert = 0xFF0000,
     .decay_ms = 1500,
-    .response_ms = 100
+    .response_ms = 100,
+    .babyphone_trigger_db = BABYPHONE_TRIGGER_DB,
+    .babyphone_sustain_s = (uint16_t)(BABYPHONE_SUSTAIN_MS / 1000),
+    .babyphone_clear_s = (uint16_t)(BABYPHONE_CLEAR_MS / 1000),
+    .babyphone_night_color = BABYPHONE_NIGHT_COLOR,
+    .babyphone_night_brightness = BABYPHONE_NIGHT_BRIGHTNESS
   };
 }
 
@@ -66,9 +69,6 @@ void WebService::init() {
   
   // Create WebServer instance
   server = new WebServer(80);
-  
-  // Store global pointer for task wrapper
-  g_web_service = this;
 
   // WiFi mode (STA with AP fallback) and mDNS are handled by
   // NetworkService, initialized by main.cpp before this. WebService only
@@ -230,7 +230,15 @@ void WebService::webTaskHandler() {
       ESP.restart();
     }
 
-    vTaskDelay(pdMS_TO_TICKS(50));  // Yield for 50ms
+    // 10ms, not 50ms. server->handleClient() services at most ONE client per
+    // call, so a 50ms tick capped this endpoint at 20 requests/second no
+    // matter how trivial each response was - and anything above that queued
+    // up in the browser instead (visible as a staircase of ever-shorter
+    // response times in DevTools). At 10ms the ceiling is 100/s, which leaves
+    // real headroom above the UI's polling rate for OTA uploads and a second
+    // browser tab. The extra wakeups are affordable now that the LED show()
+    // storm and the free-spinning loop() are both fixed.
+    vTaskDelay(pdMS_TO_TICKS(10));
   }
 }
 
@@ -338,6 +346,66 @@ time_t WebService::getLastAlertEpoch() {
   return snapshot;
 }
 
+//============================================
+// WebService::updateBabyphoneState() - sustained-threshold detector for
+// Babyphone mode (display_mode == 2). Called once per main-loop tick with
+// the raw dB reading, right next to accumulateHourlyStat().
+//
+// Deliberately NOT a naive port of accumulateHourlyStat()'s elapsed-ms
+// pattern: resetting a single countdown on every quiet sample would let a
+// short dip below threshold (baby inhaling between cries) cancel the whole
+// sustain window. Instead this uses two independent timers with asymmetric
+// hysteresis - a longer, uninterrupted "sustain" window to raise the alarm,
+// a shorter "clear" grace period (that a brief dip doesn't reset either) to
+// drop it, so the HA binary_sensor doesn't flap on every breath.
+//============================================
+void WebService::updateBabyphoneState(double dB_current, const Config& config) {
+  if (config.display_mode != 2) {
+    // Not in Babyphone mode - keep the state machine idle/reset so a mode
+    // switch back to 2 later starts clean, and no stale alarm lingers.
+    babyphone_above_since_ms = 0;
+    babyphone_below_since_ms = 0;
+    if (babyphone_state != QUIET || babyphone_alarm_active) {
+      babyphone_state = QUIET;
+      portENTER_CRITICAL(&hourly_mux);
+      babyphone_alarm_active = false;
+      portEXIT_CRITICAL(&hourly_mux);
+    }
+    return;
+  }
+
+  unsigned long now = millis();
+  unsigned long sustain_ms = (unsigned long)config.babyphone_sustain_s * 1000UL;
+  unsigned long clear_ms = (unsigned long)config.babyphone_clear_s * 1000UL;
+
+  if (dB_current >= config.babyphone_trigger_db) {
+    babyphone_below_since_ms = 0;
+    if (babyphone_above_since_ms == 0) babyphone_above_since_ms = now;
+    if (babyphone_state != ALARMED && (now - babyphone_above_since_ms) >= sustain_ms) {
+      babyphone_state = ALARMED;
+    }
+  } else {
+    babyphone_above_since_ms = 0;
+    if (babyphone_below_since_ms == 0) babyphone_below_since_ms = now;
+    if (babyphone_state == ALARMED && (now - babyphone_below_since_ms) >= clear_ms) {
+      babyphone_state = QUIET;
+    }
+  }
+
+  bool active = (babyphone_state == ALARMED);
+  portENTER_CRITICAL(&hourly_mux);
+  babyphone_alarm_active = active;
+  portEXIT_CRITICAL(&hourly_mux);
+}
+
+// Thread-safe snapshot of babyphone_alarm_active - see comment in web.h.
+bool WebService::getBabyphoneAlarmActive() {
+  portENTER_CRITICAL(&hourly_mux);
+  bool snapshot = babyphone_alarm_active;
+  portEXIT_CRITICAL(&hourly_mux);
+  return snapshot;
+}
+
 // Clears today's buckets immediately (manual reset) and persists right
 // away, unlike the throttled periodic flush in webTaskHandler().
 void WebService::resetHourlyStats() {
@@ -368,7 +436,13 @@ void WebService::resetHourlyStats() {
 //============================================
 
 void WebService::handleRoot() {
-  server->send(200, "text/html", html_ui);
+  // send_P(), not send() - the plain-char* overload of send() copies the
+  // entire page into a freshly heap-allocated String first (see
+  // WebServer.cpp's own "Use send_P for long arrays" log_e warning). At
+  // ~67KB that copy can fail silently on fragmented internal SRAM and the
+  // browser gets a truncated/empty 200 response. send_P() streams html_ui
+  // directly without that intermediate copy.
+  server->send_P(200, "text/html", html_ui);
 }
 
 // Fills a JsonDocument with the current config's fields. Shared by
@@ -385,6 +459,11 @@ void WebService::configToJson(const Config& cfg, JsonObject obj) {
   obj["color_alert"] = cfg.color_alert;
   obj["decay_ms"] = cfg.decay_ms;
   obj["response_ms"] = cfg.response_ms;
+  obj["babyphone_trigger_db"] = cfg.babyphone_trigger_db;
+  obj["babyphone_sustain_s"] = cfg.babyphone_sustain_s;
+  obj["babyphone_clear_s"] = cfg.babyphone_clear_s;
+  obj["babyphone_night_color"] = cfg.babyphone_night_color;
+  obj["babyphone_night_brightness"] = cfg.babyphone_night_brightness;
 }
 
 // Applies whichever recognized fields are present in `obj` onto `cfg`,
@@ -392,36 +471,87 @@ void WebService::configToJson(const Config& cfg, JsonObject obj) {
 // malicious request body can't push the config into a nonsensical or
 // overflowing state. Missing fields are left untouched. Shared by
 // handleApiSet() and the import endpoint (added in a later phase).
+//
+// Note on the local `v` in each block below: constrain() is a macro that
+// expands its first argument THREE times. Passing obj["..."].as<T>() to it
+// directly - as this used to - therefore walked ArduinoJson's slot list three
+// times per field, 45 lookups for the 15 fields instead of 15.
+//
 void WebService::applyJsonToConfig(JsonObjectConst obj, Config& cfg) {
-  if (obj["display_mode"].is<int>())
-    cfg.display_mode = constrain(obj["display_mode"].as<int>(), 0, 1);
+  if (obj["display_mode"].is<int>()) {
+    int v = obj["display_mode"].as<int>();
+    cfg.display_mode = constrain(v, 0, 2);
+  }
 
-  if (obj["db_floor"].is<float>())
-    cfg.db_floor = constrain(obj["db_floor"].as<float>(), 20.0f, 60.0f);
+  if (obj["db_floor"].is<float>()) {
+    float v = obj["db_floor"].as<float>();
+    cfg.db_floor = constrain(v, 20.0f, 60.0f);
+  }
 
-  if (obj["db_normal_switchover"].is<float>())
-    cfg.db_normal_switchover = constrain(obj["db_normal_switchover"].as<float>(), 30.0f, 70.0f);
+  if (obj["db_normal_switchover"].is<float>()) {
+    float v = obj["db_normal_switchover"].as<float>();
+    cfg.db_normal_switchover = constrain(v, 30.0f, 70.0f);
+  }
 
-  if (obj["db_warning_switchover"].is<float>())
-    cfg.db_warning_switchover = constrain(obj["db_warning_switchover"].as<float>(), 40.0f, 85.0f);
+  if (obj["db_warning_switchover"].is<float>()) {
+    float v = obj["db_warning_switchover"].as<float>();
+    cfg.db_warning_switchover = constrain(v, 40.0f, 85.0f);
+  }
 
-  if (obj["led_brightness"].is<int>())
-    cfg.led_brightness = constrain(obj["led_brightness"].as<int>(), 0, 255);
+  if (obj["led_brightness"].is<int>()) {
+    int v = obj["led_brightness"].as<int>();
+    cfg.led_brightness = constrain(v, 0, 255);
+  }
 
-  if (obj["color_normal"].is<uint32_t>())
-    cfg.color_normal = constrain(obj["color_normal"].as<uint32_t>(), 0u, 0xFFFFFFu);
+  if (obj["color_normal"].is<uint32_t>()) {
+    uint32_t v = obj["color_normal"].as<uint32_t>();
+    cfg.color_normal = constrain(v, 0u, 0xFFFFFFu);
+  }
 
-  if (obj["color_warning"].is<uint32_t>())
-    cfg.color_warning = constrain(obj["color_warning"].as<uint32_t>(), 0u, 0xFFFFFFu);
+  if (obj["color_warning"].is<uint32_t>()) {
+    uint32_t v = obj["color_warning"].as<uint32_t>();
+    cfg.color_warning = constrain(v, 0u, 0xFFFFFFu);
+  }
 
-  if (obj["color_alert"].is<uint32_t>())
-    cfg.color_alert = constrain(obj["color_alert"].as<uint32_t>(), 0u, 0xFFFFFFu);
+  if (obj["color_alert"].is<uint32_t>()) {
+    uint32_t v = obj["color_alert"].as<uint32_t>();
+    cfg.color_alert = constrain(v, 0u, 0xFFFFFFu);
+  }
 
-  if (obj["decay_ms"].is<int>())
-    cfg.decay_ms = constrain(obj["decay_ms"].as<int>(), 0, 3000);
+  if (obj["decay_ms"].is<int>()) {
+    int v = obj["decay_ms"].as<int>();
+    cfg.decay_ms = constrain(v, 0, 3000);
+  }
 
-  if (obj["response_ms"].is<int>())
-    cfg.response_ms = constrain(obj["response_ms"].as<int>(), 0, 500);
+  if (obj["response_ms"].is<int>()) {
+    int v = obj["response_ms"].as<int>();
+    cfg.response_ms = constrain(v, 0, 500);
+  }
+
+  if (obj["babyphone_trigger_db"].is<float>()) {
+    float v = obj["babyphone_trigger_db"].as<float>();
+    cfg.babyphone_trigger_db = constrain(v, 30.0f, 100.0f);
+  }
+
+  if (obj["babyphone_sustain_s"].is<int>()) {
+    int v = obj["babyphone_sustain_s"].as<int>();
+    cfg.babyphone_sustain_s = constrain(v, 1, 300);
+  }
+
+  if (obj["babyphone_clear_s"].is<int>()) {
+    int v = obj["babyphone_clear_s"].as<int>();
+    cfg.babyphone_clear_s = constrain(v, 1, 300);
+  }
+
+  if (obj["babyphone_night_color"].is<uint32_t>()) {
+    uint32_t v = obj["babyphone_night_color"].as<uint32_t>();
+    cfg.babyphone_night_color = constrain(v, 0u, 0xFFFFFFu);
+  }
+
+  if (obj["babyphone_night_brightness"].is<int>()) {
+    int v = obj["babyphone_night_brightness"].as<int>();
+    cfg.babyphone_night_brightness = constrain(v, 0, 255);
+  }
 }
 
 // Shared field-merge for NetworkSettings, used by both handleNetworkSet()
@@ -448,8 +578,12 @@ void WebService::applyJsonToNetworkSettings(JsonObjectConst obj, NetworkSettings
 }
 
 void WebService::handleApiGet() {
-  DynamicJsonDocument doc(384);
-  configToJson(config, doc.to<JsonObject>());
+  // Snapshot under the lock like every other reader, rather than serializing
+  // straight out of the shared `config`.
+  Config cfg = getConfigSnapshot();
+
+  DynamicJsonDocument doc(512);
+  configToJson(cfg, doc.to<JsonObject>());
   String json;
   serializeJson(doc, json);
   server->send(200, "application/json", json);
@@ -462,14 +596,25 @@ void WebService::handleApiSet() {
     return;
   }
 
-  String body = server->arg("plain");
+  // arg("plain") already returns the body WebServer buffered; bind it to a
+  // const reference instead of copying the whole thing a second time.
+  const String& body = server->arg("plain");
   log_i("Received JSON: %s", body.c_str());
 
-  DynamicJsonDocument doc(384);
+  // 768, not 512: deserializing from a String makes ArduinoJson duplicate
+  // every key into the document's pool. 15 slots (240B) plus the 248 bytes
+  // of key text left just 24 bytes of headroom - one added field would have
+  // silently overflowed, which is exactly what the check below now catches.
+  DynamicJsonDocument doc(768);
   DeserializationError err = deserializeJson(doc, body);
   if (err) {
     log_e("[WEB] JSON parse failed: %s", err.c_str());
     server->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+    return;
+  }
+  if (doc.overflowed()) {
+    log_e("[WEB] Config JSON too large for document pool");
+    server->send(400, "application/json", "{\"error\":\"Payload too large\"}");
     return;
   }
 
@@ -494,12 +639,26 @@ void WebService::handleApiStatus() {
   double dB_snapshot = current_dB;
   portEXIT_CRITICAL(&dB_mux);
 
-  DynamicJsonDocument doc(160);
+  DynamicJsonDocument doc(256);
   doc["db"] = dB_snapshot;
   if (suggested_floor > 0.0) {
     doc["suggested_floor"] = suggested_floor;
   }
   doc["firmware"] = FIRMWARE_VERSION;
+  doc["babyphone_alarm"] = getBabyphoneAlarmActive();
+  // Diagnostic for the audio-stream ring buffer's PSRAM-vs-SRAM fallback
+  // (see AudioStreamService::init()) - lets this be checked over the API
+  // without a serial monitor.
+  doc["psram_size"] = ESP.getPsramSize();
+  doc["psram_free"] = ESP.getFreePsram();
+  doc["free_heap"] = ESP.getFreeHeap();
+  // Largest single block that could still be allocated, as opposed to the
+  // SUM of all free bytes that free_heap reports. The gap between the two is
+  // fragmentation: a heap with 40KB free spread over dozens of holes will
+  // still fail a 4KB request. This is the number that actually predicts an
+  // allocation failure, so it is the more useful one to watch over days of
+  // uptime.
+  doc["max_alloc_heap"] = ESP.getMaxAllocHeap();
   String json;
   serializeJson(doc, json);
   server->send(200, "application/json", json);
@@ -508,41 +667,46 @@ void WebService::handleApiStatus() {
 // GET /api/history - oldest-to-newest JSON array of the last HISTORY_SIZE
 // (5 minutes @ 1/sec) dB readings, for the web UI's canvas line plot.
 void WebService::handleApiHistory() {
-  // Static, not a stack array: the web task's stack is only 4096 bytes
-  // (see startTask()), and HISTORY_SIZE*sizeof(float) plus this function's
-  // own frame would eat a meaningful chunk of that. handleClient() only
-  // processes one request at a time on this task, so a single shared
-  // buffer here is safe.
-  static float snapshot[HISTORY_SIZE];
+  // Formatted by hand into one pre-sized String rather than through
+  // ArduinoJson. A 300-element float array costs 300 slots = ~4.8KB of
+  // document pool on top of the ~2KB of text that actually goes on the wire,
+  // and this endpoint is polled every 5 seconds - that was the single
+  // largest transient allocation in the firmware. It also retires the 1.2KB
+  // static snapshot buffer this function used to keep permanently.
   int count, next;
-
   portENTER_CRITICAL(&dB_mux);
   count = history_count;
   next = history_next;
-  memcpy(snapshot, history, sizeof(history));
   portEXIT_CRITICAL(&dB_mux);
 
-  // JSON array is built outside the critical section - ArduinoJson
-  // allocates on the heap, which (like String) must not happen inside a
-  // portENTER_CRITICAL/portEXIT_CRITICAL section on ESP32.
-  DynamicJsonDocument doc(HISTORY_SIZE * 16 + 64);
-  JsonArray arr = doc.to<JsonArray>();
+  String json;
+  json.reserve(HISTORY_SIZE * 7 + 8);  // "123.4," per entry, plus brackets
+  json += '[';
 
   int oldest = (count < HISTORY_SIZE) ? 0 : next;
+  char buf[16];
   for (int i = 0; i < count; i++) {
     int idx = (oldest + i) % HISTORY_SIZE;
-    arr.add(snapshot[idx]);
+    // Read without the spinlock: a 4-byte aligned float load is atomic on
+    // this core, so the worst case is that one sample of a 300-point graph
+    // comes from the tick after the count was read. Taking the lock 300
+    // times (String += must not run inside a critical section, so it would
+    // have to be per element) would cost far more than that is worth.
+    float v = history[idx];
+    if (i) json += ',';
+    snprintf(buf, sizeof(buf), "%.1f", v);
+    json += buf;
   }
+  json += ']';
 
-  String json;
-  serializeJson(doc, json);
   server->send(200, "application/json", json);
 }
 
 // GET /api/hourly - today's hour-of-day time distribution across the three
 // NoiseLevel colors, for the web UI's stacked-bar "Tagesstatistik" chart.
 void WebService::handleHourlyGet() {
-  static uint32_t snapshot[24][3];
+  // 288 bytes on the (8KB) web-task stack, not a permanent static buffer.
+  uint32_t snapshot[24][3];
   time_t reset_at;
   time_t now = time(nullptr);
   bool synced = now >= (time_t)HOURLY_STATS_MIN_VALID_EPOCH;
@@ -552,21 +716,33 @@ void WebService::handleHourlyGet() {
   reset_at = hourly_reset_at;
   portEXIT_CRITICAL(&hourly_mux);
 
-  // JSON is built outside the critical section - ArduinoJson allocates on
-  // the heap, which must not happen inside a portENTER_CRITICAL section.
-  DynamicJsonDocument doc(1536);
-  doc["time_synced"] = synced;
-  doc["reset_at"] = (uint32_t)reset_at;
-  JsonArray hours = doc.createNestedArray("hours");
-  for (int h = 0; h < 24; h++) {
-    JsonArray bucket = hours.createNestedArray();
-    bucket.add(snapshot[h][NORMAL]);
-    bucket.add(snapshot[h][WARNING]);
-    bucket.add(snapshot[h][ALERT]);
-  }
-
+  // Built by hand rather than through ArduinoJson - and that is a bug fix,
+  // not just an optimization. This response needs 3 + 24 + 72 = 99 slots at
+  // 16 bytes each = 1584 bytes, but the DynamicJsonDocument here was sized
+  // 1536 (96 slots). The last three add() calls therefore failed silently,
+  // hour 23 serialized as an empty array, and the web UI's `bucket[0]` came
+  // back undefined - which propagated through the totals and rendered the
+  // whole day's legend as "NaN %". Formatting the numbers directly cannot
+  // overflow, and saves the 1.5KB pool along the way.
   String json;
-  serializeJson(doc, json);
+  json.reserve(24 * 36 + 64);
+  json += "{\"time_synced\":";
+  json += synced ? "true" : "false";
+  json += ",\"reset_at\":";
+  json += (uint32_t)reset_at;
+  json += ",\"hours\":[";
+  for (int h = 0; h < 24; h++) {
+    if (h) json += ',';
+    json += '[';
+    json += snapshot[h][NORMAL];
+    json += ',';
+    json += snapshot[h][WARNING];
+    json += ',';
+    json += snapshot[h][ALERT];
+    json += ']';
+  }
+  json += "]}";
+
   server->send(200, "application/json", json);
 }
 
@@ -581,7 +757,7 @@ void WebService::handleHourlyReset() {
 // handler only ever runs on the web task, same as NetworkService's own
 // read/write paths, so no additional locking is needed here.
 void WebService::handleNetworkGet() {
-  NetworkSettings s = network_service.getSettings();
+  const NetworkSettings& s = network_service.getSettings();  // read-only, no copy
 
   DynamicJsonDocument doc(512);
   doc["wifi_ssid"] = s.wifi_ssid;
@@ -607,15 +783,16 @@ void WebService::handleNetworkSet() {
     return;
   }
 
-  DynamicJsonDocument doc(512);
+  DynamicJsonDocument doc(768);
   DeserializationError err = deserializeJson(doc, server->arg("plain"));
-  if (err) {
+  if (err || doc.overflowed()) {
     server->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
     return;
   }
 
   // Start from the currently stored settings so omitted/blank password
-  // fields don't clobber a previously saved credential.
+  // fields don't clobber a previously saved credential. Deliberately a copy
+  // (not a const&): this one gets modified before being handed on.
   NetworkSettings s = network_service.getSettings();
   applyJsonToNetworkSettings(doc.as<JsonObjectConst>(), s, /*allow_empty_password=*/false);
 
@@ -638,9 +815,9 @@ void WebService::handleNetworkSet() {
 // blocking, per the plan.
 void WebService::handleConfigExport() {
   Config cfg = getConfigSnapshot();
-  NetworkSettings net = network_service.getSettings();
+  const NetworkSettings& net = network_service.getSettings();  // read-only, no copy
 
-  DynamicJsonDocument doc(1024);
+  DynamicJsonDocument doc(1280);
   JsonObject config_obj = doc.createNestedObject("config");
   configToJson(cfg, config_obj);
 
@@ -671,10 +848,17 @@ void WebService::handleConfigImport() {
     return;
   }
 
-  DynamicJsonDocument doc(1024);
+  DynamicJsonDocument doc(1536);
   DeserializationError err = deserializeJson(doc, server->arg("plain"));
   if (err) {
     server->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+    return;
+  }
+  if (doc.overflowed()) {
+    // Better to reject outright than to import a silently truncated file and
+    // leave the device in a half-configured state.
+    log_e("[WEB] Import file too large for document pool");
+    server->send(400, "application/json", "{\"error\":\"Payload too large\"}");
     return;
   }
 
@@ -707,7 +891,9 @@ void WebService::handleConfigImport() {
 
 // POST /update - streaming firmware upload, gated by OTA_PASSWORD (the same
 // credential ArduinoOTA already uses) via HTTP Basic Auth, since unlike the
-// other endpoints this one can brick or replace the firmware outright.
+// other endpoints this one can brick or replace the firmware outright. Note
+// this is NOT the live-listen credential (LIVE_PASSWORD) - see config.h for
+// why the two are kept apart.
 // WebServer's upload API splits handling across two callbacks registered
 // together in init(): this one is invoked repeatedly as the multipart body
 // streams in, handleUpdateResult() once at the end to produce the actual
@@ -716,6 +902,8 @@ void WebService::handleUpdateUpload() {
   HTTPUpload& upload = server->upload();
 
   if (upload.status == UPLOAD_FILE_START) {
+    update_started = false;
+
     if (!server->authenticate(OTA_USERNAME, OTA_PASSWORD)) {
       // Don't start the flash - handleUpdateResult() will see the same
       // failed authenticate() check and send the 401.
@@ -739,12 +927,18 @@ void WebService::handleUpdateUpload() {
 
     if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
       log_e("[WEB] Update.begin() failed: %s", Update.errorString());
+      return;
     }
+    update_started = true;
   } else if (upload.status == UPLOAD_FILE_WRITE) {
+    if (!update_started) return;  // rejected/failed at START - see update_started
     if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
       log_e("[WEB] Update.write() failed: %s", Update.errorString());
     }
   } else if (upload.status == UPLOAD_FILE_END) {
+    if (!update_started) return;
+    update_started = false;
+
     if (Update.end(true)) {
       log_i("[WEB] /update upload complete: %u bytes", upload.totalSize);
 
@@ -787,7 +981,10 @@ void WebService::handleUpdateUpload() {
     }
   } else if (upload.status == UPLOAD_FILE_ABORTED) {
     log_e("[WEB] /update upload aborted");
-    Update.end();
+    if (update_started) {
+      update_started = false;
+      Update.end();
+    }
   }
 }
 
@@ -828,9 +1025,14 @@ void WebService::loadConfig() {
   config.color_alert = prefs.getUInt("col_alert", 0xFF0000);
   config.decay_ms = prefs.getUShort("decay_ms", 1500);
   config.response_ms = prefs.getUShort("response_ms", 100);
+  config.babyphone_trigger_db = prefs.getFloat("bp_trig", BABYPHONE_TRIGGER_DB);
+  config.babyphone_sustain_s = prefs.getUShort("bp_sustain", BABYPHONE_SUSTAIN_MS / 1000);
+  config.babyphone_clear_s = prefs.getUShort("bp_clear", BABYPHONE_CLEAR_MS / 1000);
+  config.babyphone_night_color = prefs.getUInt("bp_color", BABYPHONE_NIGHT_COLOR);
+  config.babyphone_night_brightness = prefs.getUChar("bp_bright", BABYPHONE_NIGHT_BRIGHTNESS);
   prefs.end();
-  
-  log_i("Config loaded: mode=%d decay=%dms response=%dms", 
+
+  log_i("Config loaded: mode=%d decay=%dms response=%dms",
     config.display_mode, config.decay_ms, config.response_ms);
 }
 
@@ -847,9 +1049,15 @@ void WebService::saveConfig() {
   prefs.putUInt("col_alert", config.color_alert);
   prefs.putUShort("decay_ms", config.decay_ms);
   prefs.putUShort("response_ms", config.response_ms);
+  prefs.putFloat("bp_trig", config.babyphone_trigger_db);
+  prefs.putUShort("bp_sustain", config.babyphone_sustain_s);
+  prefs.putUShort("bp_clear", config.babyphone_clear_s);
+  prefs.putUInt("bp_color", config.babyphone_night_color);
+  prefs.putUChar("bp_bright", config.babyphone_night_brightness);
   prefs.end();
-  
-  const char* mode_str = (config.display_mode == 0) ? "TRAFFIC_LIGHT" : "VU_METER";
+
+  const char* mode_str = (config.display_mode == 0) ? "TRAFFIC_LIGHT" :
+    (config.display_mode == 1) ? "VU_METER" : "BABYPHONE";
   log_i("=== CONFIG SAVED ===");
   log_i("Mode: %s", mode_str);
   log_i("Floor: %.1f dB", config.db_floor);
@@ -994,8 +1202,18 @@ const char* html_ui = R"rawliteral(
     .ui-pill.r{color:var(--alert);background:rgba(209,76,60,.14);border-color:rgba(209,76,60,.32)}
 
     .ui-meter{position:relative;height:12px;border-radius:6px;overflow:hidden;background:var(--paper-2)}
-    .ui-meter-mask{position:absolute;inset:0;background:var(--paper-2);opacity:.82}
-    .ui-needle{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--ink);border-radius:2px}
+    /* The needle and the mask edge glide between polls instead of stepping.
+       At a 500ms poll a linear 450ms tween lands just as the next value
+       arrives, so the meter reads as continuous motion - smoother than the
+       old 200ms polling was without any transition at all. Honours the OS
+       "reduce motion" setting below. */
+    .ui-meter-mask{position:absolute;inset:0;background:var(--paper-2);opacity:.82;
+      transition:clip-path .45s linear}
+    .ui-needle{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--ink);border-radius:2px;
+      transition:left .45s linear}
+    @media (prefers-reduced-motion:reduce){
+      .ui-meter-mask,.ui-needle{transition:none}
+    }
     .ui-scale{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10.5px;color:var(--ink-3);
       font-variant-numeric:tabular-nums;margin-top:4px}
     .ui-facts{display:flex;gap:0;border-top:1px solid var(--line-soft);padding-top:11px}
@@ -1020,6 +1238,12 @@ const char* html_ui = R"rawliteral(
     .ui-sum b{font-size:14.5px;font-weight:600;letter-spacing:-.005em}
     .ui-sum .ui-val{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--ink-3);
       font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:46%}
+    .ui-check{display:flex;align-items:center;gap:8px;cursor:pointer;
+      font-size:12.5px;color:var(--ink-2);user-select:none}
+    .ui-check input{width:15px;height:15px;flex:none;accent-color:var(--ink);margin:0}
+
+    /* "● live" marker in the Live-listen card header while streaming */
+    .ui-sum .ui-val.on{color:var(--alert);font-weight:600}
     .ui-chev{width:9px;height:9px;border-right:1.6px solid var(--ink-3);border-bottom:1.6px solid var(--ink-3);
       transform:rotate(45deg) translate(-2px,-2px);flex:none;margin-left:2px}
     details[open] > .ui-sum .ui-chev{transform:rotate(-135deg) translate(-1px,-1px)}
@@ -1166,6 +1390,32 @@ const char* html_ui = R"rawliteral(
         </div>
       </div>
 
+      <!-- Live listen: deliberately here in the status rail, directly under
+           the level readout, and NOT buried in the Babyphone drawer under
+           "Licht" where it used to live. It is not a light setting, and it
+           is the one control you reach for in a hurry. Also no longer gated
+           on display_mode == 2: the device-side stream (AudioStreamService)
+           never checked the mode either, so hiding it was a UI-only
+           restriction that just made it harder to find. -->
+      <div class="ui-card">
+        <div class="ui-sum"><b data-t="listen.title">Live h&ouml;ren</b><span class="ui-val" id="listen-val" data-t="listen.sub">ins Zimmer h&ouml;ren</span></div>
+        <div class="ui-body" id="listen-row">
+          <div class="ui-row-btn">
+            <button class="ui-btn ui-primary ui-wide" type="button" id="btn-listen-start" data-t="listen.start">Live h&ouml;ren</button>
+            <button class="ui-btn ui-wide" type="button" id="btn-listen-stop" data-t="listen.stop" style="display:none">Stop</button>
+          </div>
+          <div class="ui-field">
+            <div class="ui-lab"><span data-t="listen.pass">Live-Passwort</span></div>
+            <input class="ui-in" type="password" id="listen-pass" autocomplete="current-password">
+            <label class="ui-check">
+              <input type="checkbox" id="listen-remember">
+              <span data-t="listen.remember">Auf diesem Ger&auml;t merken</span>
+            </label>
+          </div>
+          <div class="ui-hint" id="listen-status"></div>
+        </div>
+      </div>
+
       <div class="ui-card">
         <div class="ui-sum"><b data-t="hist.title">Verlauf</b><span class="ui-val" data-t="hist.sub">letzte 5 min</span></div>
         <div class="ui-body">
@@ -1217,6 +1467,10 @@ const char* html_ui = R"rawliteral(
               <button type="button" class="ui-opt" id="opt-mode-1" data-mode="1">
                 <div class="ui-optt"><i class="ui-radio"></i><span data-t="mode.vu">VU-Meter</span></div>
                 <small data-t="mode.vu.desc">Der Ausschlag w&auml;chst mit der Lautst&auml;rke.</small>
+              </button>
+              <button type="button" class="ui-opt" id="opt-mode-2" data-mode="2">
+                <div class="ui-optt"><i class="ui-radio"></i><span data-t="mode.baby">Babyphone</span></div>
+                <small data-t="mode.baby.desc">Warmes Nachtlicht, Alarm nur per MQTT/Home Assistant.</small>
               </button>
             </div>
           </div>
@@ -1278,6 +1532,37 @@ const char* html_ui = R"rawliteral(
               <input type="range" class="ui-range" id="response-slider" min="0" max="500" step="50" value="100">
               <div class="ui-hint" data-t="response.hint">Kleiner Wert = zappeliger, gr&ouml;&szlig;erer Wert = ruhiger.</div>
             </div>
+          </div>
+        </details>
+
+        <details class="ui-d" id="d-baby">
+          <summary class="ui-sum"><b data-t="baby.summary">Babyphone</b><span class="ui-val" id="baby-val">-- dB</span><i class="ui-chev"></i></summary>
+          <div class="ui-body">
+            <div class="ui-field">
+              <div class="ui-lab"><span data-t="baby.trigger.label">Ausl&ouml;seschwelle</span><span class="ui-num" id="baby-trigger-num">-- dB</span></div>
+              <input type="range" class="ui-range ui-r" id="baby-trigger-slider" min="30" max="100" step="1" value="65">
+              <div class="ui-hint" data-t="baby.trigger.hint">Lautst&auml;rke, die anhaltend &uuml;berschritten werden muss.</div>
+            </div>
+            <div class="ui-row2">
+              <div class="ui-field">
+                <div class="ui-lab"><span data-t="baby.sustain.label">Anhaltend f&uuml;r</span><span class="ui-num" id="baby-sustain-num">-- s</span></div>
+                <input type="range" class="ui-range" id="baby-sustain-slider" min="1" max="300" step="1" value="5">
+              </div>
+              <div class="ui-field">
+                <div class="ui-lab"><span data-t="baby.clear.label">L&ouml;scht nach</span><span class="ui-num" id="baby-clear-num">-- s</span></div>
+                <input type="range" class="ui-range" id="baby-clear-slider" min="1" max="300" step="1" value="3">
+              </div>
+            </div>
+            <div class="ui-hint" data-t="baby.timing.hint">Alarm l&ouml;st erst nach ununterbrochen lauter Phase aus und l&ouml;scht sich erst nach ununterbrochen leiser Phase - kurze Aussetzer z&auml;hlen nicht.</div>
+            <div class="ui-swatchrow">
+              <div class="ui-swatch"><input type="color" id="baby-color" value="#FF3C00"><em data-t="baby.color">Nachtlicht</em><code id="baby-color-hex">#FF3C00</code></div>
+            </div>
+            <div class="ui-field">
+              <div class="ui-lab"><span data-t="baby.bright.label">Nachtlicht-Helligkeit</span><span class="ui-num" id="baby-bright-num">-- / 255</span></div>
+              <input type="range" class="ui-range" id="baby-bright-slider" min="0" max="255" step="1" value="15">
+            </div>
+            <div class="ui-hint" data-t="baby.alarm.hint">Der Alarm wird ausschlie&szlig;lich per MQTT an Home Assistant gemeldet - die LED bleibt unver&auml;ndert im Nachtlicht.</div>
+            <div class="ui-hint" data-t="baby.listen.hint">Zum Mith&ouml;ren die Karte &quot;Live h&ouml;ren&quot; oben benutzen - sie funktioniert in jedem Anzeigemodus.</div>
           </div>
         </details>
       </div>
@@ -1373,7 +1658,7 @@ const char* html_ui = R"rawliteral(
   var STR = {
     de: {
       'fact.peak':'Spitze 5 min','fact.thresh':'Schwellen','fact.mode':'Modus',
-      'mode.traffic':'Ampel','mode.vu':'VU-Meter',
+      'mode.traffic':'Ampel','mode.vu':'VU-Meter','mode.baby':'Babyphone',
       'pill.quiet':'Ruhig','pill.warn':'Laut','pill.alert':'Zu laut',
       'hist.title':'Verlauf','hist.sub':'letzte 5 min','hist.now':'jetzt',
       'today.title':'Heute','today.sub':'seit 00:00','today.reset':'Tag zurücksetzen',
@@ -1386,6 +1671,7 @@ const char* html_ui = R"rawliteral(
       'mode.summary':'Anzeigemodus',
       'mode.traffic.desc':'Der ganze Streifen leuchtet grün, gelb oder rot.',
       'mode.vu.desc':'Der Ausschlag wächst mit der Lautstärke.',
+      'mode.baby.desc':'Warmes Nachtlicht, Alarm nur per MQTT/Home Assistant.',
       'bright.summary':'Helligkeit & Farben',
       'bright.label':'Helligkeit',
       'sw.normal':'Ruhig','sw.warning':'Laut','sw.alert':'Zu laut',
@@ -1398,6 +1684,27 @@ const char* html_ui = R"rawliteral(
       'timing.summary':'Reaktion',
       'decay.label':'Nachleuchten','decay.hint':'Wie lange die Farbe nach einem Geräusch stehen bleibt.',
       'response.label':'Ansprechzeit','response.hint':'Kleiner Wert = zappeliger, größerer Wert = ruhiger.',
+      'baby.summary':'Babyphone',
+      'baby.trigger.label':'Auslöseschwelle',
+      'baby.trigger.hint':'Lautstärke, die anhaltend überschritten werden muss.',
+      'baby.sustain.label':'Anhaltend für',
+      'baby.clear.label':'Löscht nach',
+      'baby.timing.hint':'Alarm löst erst nach ununterbrochen lauter Phase aus und löscht sich erst nach ununterbrochen leiser Phase – kurze Aussetzer zählen nicht.',
+      'baby.color':'Nachtlicht',
+      'baby.bright.label':'Nachtlicht-Helligkeit',
+      'baby.alarm.hint':'Der Alarm wird ausschließlich per MQTT an Home Assistant gemeldet – die LED bleibt unverändert im Nachtlicht.',
+      'baby.listen.hint':'Zum Mithören die Karte \u201eLive hören\u201c oben benutzen – sie funktioniert in jedem Anzeigemodus.',
+      'listen.title':'Live hören',
+      'listen.sub':'ins Zimmer hören',
+      'listen.live':'● live',
+      'listen.pass':'Live-Passwort',
+      'listen.remember':'Auf diesem Gerät merken',
+      'listen.start':'Live hören',
+      'listen.stop':'Stop',
+      'listen.connecting':'Verbinde…',
+      'listen.playing':'Live – wird abgespielt…',
+      'listen.fail':'Verbindung fehlgeschlagen (Live-Passwort korrekt?)',
+      'listen.ended':'Verbindung beendet',
       'save.licht':'Lichteinstellungen speichern',
       'save.ok':'Gespeichert um ',
       'save.fail':'Speichern fehlgeschlagen',
@@ -1439,7 +1746,7 @@ const char* html_ui = R"rawliteral(
     },
     en: {
       'fact.peak':'Peak 5 min','fact.thresh':'Thresholds','fact.mode':'Mode',
-      'mode.traffic':'Traffic light','mode.vu':'VU meter',
+      'mode.traffic':'Traffic light','mode.vu':'VU meter','mode.baby':'Babyphone',
       'pill.quiet':'Quiet','pill.warn':'Loud','pill.alert':'Too loud',
       'hist.title':'History','hist.sub':'last 5 min','hist.now':'now',
       'today.title':'Today','today.sub':'since 00:00','today.reset':'Reset today',
@@ -1452,6 +1759,7 @@ const char* html_ui = R"rawliteral(
       'mode.summary':'Display mode',
       'mode.traffic.desc':'The whole strip glows green, yellow or red.',
       'mode.vu.desc':'The lit portion grows with volume.',
+      'mode.baby.desc':'Warm night light, alarm only via MQTT/Home Assistant.',
       'bright.summary':'Brightness & colours',
       'bright.label':'Brightness',
       'sw.normal':'Quiet','sw.warning':'Loud','sw.alert':'Too loud',
@@ -1464,6 +1772,27 @@ const char* html_ui = R"rawliteral(
       'timing.summary':'Response',
       'decay.label':'Decay','decay.hint':'How long the colour stays after a sound.',
       'response.label':'Response time','response.hint':'Lower = twitchier, higher = calmer.',
+      'baby.summary':'Babyphone',
+      'baby.trigger.label':'Trigger level',
+      'baby.trigger.hint':'Volume that must be exceeded continuously.',
+      'baby.sustain.label':'Sustained for',
+      'baby.clear.label':'Clears after',
+      'baby.timing.hint':'The alarm only fires after an uninterrupted loud phase and only clears after an uninterrupted quiet phase – brief dips don\'t count.',
+      'baby.color':'Night light',
+      'baby.bright.label':'Night light brightness',
+      'baby.alarm.hint':'The alarm is reported to Home Assistant via MQTT only – the LED stays unchanged as the night light.',
+      'baby.listen.hint':'To listen in, use the \u201cListen live\u201d card above – it works in every display mode.',
+      'listen.title':'Listen live',
+      'listen.sub':'listen to the room',
+      'listen.live':'● live',
+      'listen.pass':'Live password',
+      'listen.remember':'Remember on this device',
+      'listen.start':'Listen live',
+      'listen.stop':'Stop',
+      'listen.connecting':'Connecting…',
+      'listen.playing':'Live – playing…',
+      'listen.fail':'Connection failed (live password correct?)',
+      'listen.ended':'Connection ended',
       'save.licht':'Save light settings',
       'save.ok':'Saved at ',
       'save.fail':'Save failed',
@@ -1626,7 +1955,8 @@ const char* html_ui = R"rawliteral(
     el('scale-3').textContent = Math.round(maxDb);
 
     el('fact-thresh').textContent = Math.round(cfg.db_normal_switchover) + ' / ' + Math.round(cfg.db_warning_switchover);
-    el('fact-mode').textContent = t(cfg.display_mode === 0 ? 'mode.traffic' : 'mode.vu');
+    el('fact-mode').textContent = t(cfg.display_mode === 0 ? 'mode.traffic' :
+      (cfg.display_mode === 1 ? 'mode.vu' : 'mode.baby'));
 
     if (lastHistory && lastHistory.length) {
       var peak = Math.max.apply(null, lastHistory);
@@ -1732,8 +2062,8 @@ const char* html_ui = R"rawliteral(
   }
 
   function renderLichtSummaries() {
-    var mode = document.querySelector('#opt-mode-0.on') ? 0 : (document.querySelector('#opt-mode-1.on') ? 1 : 0);
-    el('mode-val').textContent = t(mode === 0 ? 'mode.traffic' : 'mode.vu');
+    var mode = currentMode();
+    el('mode-val').textContent = t(mode === 0 ? 'mode.traffic' : (mode === 1 ? 'mode.vu' : 'mode.baby'));
 
     var brightness = parseInt(el('brightness-slider').value, 10);
     el('bright-val').textContent = Math.round(brightness / 255 * 100) + ' %';
@@ -1757,6 +2087,17 @@ const char* html_ui = R"rawliteral(
     el('color-warning-hex').textContent = el('color-warning').value.toUpperCase();
     el('color-alert-hex').textContent = el('color-alert').value.toUpperCase();
 
+    var babyTrigger = parseInt(el('baby-trigger-slider').value, 10);
+    var babySustain = parseInt(el('baby-sustain-slider').value, 10);
+    var babyClear = parseInt(el('baby-clear-slider').value, 10);
+    var babyBright = parseInt(el('baby-bright-slider').value, 10);
+    el('baby-trigger-num').textContent = babyTrigger + ' dB';
+    el('baby-sustain-num').textContent = babySustain + ' s';
+    el('baby-clear-num').textContent = babyClear + ' s';
+    el('baby-bright-num').textContent = babyBright + ' / 255';
+    el('baby-val').textContent = babyTrigger + ' dB';
+    el('baby-color-hex').textContent = el('baby-color').value.toUpperCase();
+
     // slider fill percentages
     setRangeFill(el('brightness-slider'));
     setRangeFill(el('floor-slider'));
@@ -1764,6 +2105,10 @@ const char* html_ui = R"rawliteral(
     setRangeFill(el('yellow-slider'));
     setRangeFill(el('decay-slider'));
     setRangeFill(el('response-slider'));
+    setRangeFill(el('baby-trigger-slider'));
+    setRangeFill(el('baby-sustain-slider'));
+    setRangeFill(el('baby-clear-slider'));
+    setRangeFill(el('baby-bright-slider'));
 
     // LED strip preview
     var cfg = { db_normal_switchover: green, db_warning_switchover: yellow };
@@ -1786,7 +2131,7 @@ const char* html_ui = R"rawliteral(
   function setModeUi(mode) {
     document.getElementById('opt-mode-0').classList.toggle('on', mode === 0);
     document.getElementById('opt-mode-1').classList.toggle('on', mode === 1);
-    document.getElementById('opt-mode-0').querySelector('.ui-radio');
+    document.getElementById('opt-mode-2').classList.toggle('on', mode === 2);
   }
 
   function onConfigInput() {
@@ -1794,13 +2139,14 @@ const char* html_ui = R"rawliteral(
     renderLive();
   }
 
-  ['brightness-slider', 'floor-slider', 'green-slider', 'yellow-slider', 'decay-slider', 'response-slider'].forEach(function(id) {
+  ['brightness-slider', 'floor-slider', 'green-slider', 'yellow-slider', 'decay-slider', 'response-slider',
+   'baby-trigger-slider', 'baby-sustain-slider', 'baby-clear-slider', 'baby-bright-slider'].forEach(function(id) {
     el(id).addEventListener('input', onConfigInput);
   });
-  ['color-normal', 'color-warning', 'color-alert'].forEach(function(id) {
+  ['color-normal', 'color-warning', 'color-alert', 'baby-color'].forEach(function(id) {
     el(id).addEventListener('input', onConfigInput);
   });
-  [0, 1].forEach(function(m) {
+  [0, 1, 2].forEach(function(m) {
     el('opt-mode-' + m).addEventListener('click', function() {
       setModeUi(m);
       onConfigInput();
@@ -1814,7 +2160,9 @@ const char* html_ui = R"rawliteral(
   });
 
   function currentMode() {
-    return document.getElementById('opt-mode-1').classList.contains('on') ? 1 : 0;
+    if (document.getElementById('opt-mode-2').classList.contains('on')) return 2;
+    if (document.getElementById('opt-mode-1').classList.contains('on')) return 1;
+    return 0;
   }
 
   function hexToInt(hex) { return parseInt(hex.substring(1), 16); }
@@ -1830,7 +2178,12 @@ const char* html_ui = R"rawliteral(
       color_warning: hexToInt(el('color-warning').value),
       color_alert: hexToInt(el('color-alert').value),
       decay_ms: parseInt(el('decay-slider').value, 10),
-      response_ms: parseInt(el('response-slider').value, 10)
+      response_ms: parseInt(el('response-slider').value, 10),
+      babyphone_trigger_db: parseInt(el('baby-trigger-slider').value, 10),
+      babyphone_sustain_s: parseInt(el('baby-sustain-slider').value, 10),
+      babyphone_clear_s: parseInt(el('baby-clear-slider').value, 10),
+      babyphone_night_color: hexToInt(el('baby-color').value),
+      babyphone_night_brightness: parseInt(el('baby-bright-slider').value, 10)
     };
     fetch('/api/config', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
@@ -1937,6 +2290,7 @@ const char* html_ui = R"rawliteral(
 
     var xhr = new XMLHttpRequest();
     xhr.open('POST', '/update', true);
+    // OTA_USERNAME / OTA_PASSWORD from config.h (firmware flashing).
     xhr.setRequestHeader('Authorization', 'Basic ' + btoa('admin:' + password));
 
     bar.style.width = '0%';
@@ -1970,6 +2324,190 @@ const char* html_ui = R"rawliteral(
     var formData = new FormData();
     formData.append('firmware', file);
     xhr.send(formData);
+  });
+
+  // ---- Live-listen audio stream (Babyphone Phase 2) ----
+  // Own TCP port/task on the device (see include/audio_stream.h) - not the
+  // WebServer on port 80, hence the explicit port here. Kept in sync with
+  // AUDIO_STREAM_PORT/AUDIO_STREAM_SAMPLE_RATE in config.h by hand (the
+  // C++ build can't inject #defines into this literal HTML/JS blob).
+  var LISTEN_PORT = 8081;
+  var LISTEN_SAMPLE_RATE = 16000;
+
+  var listenAudioCtx = null;
+  var listenReader = null;
+  var listenNextStartTime = 0;
+  var listenActive = false;
+
+  // Optional "remember on this device" for the live password, opt-in via the
+  // checkbox. Stored in localStorage in the clear, which is a deliberate
+  // trade-off and the reason it is NOT the default: anyone with the unlocked
+  // phone can read it back, and it is scoped to this device's origin (its IP
+  // or noiselight.local), so a changed IP simply means typing it once more.
+  //
+  // Offered only for LIVE_PASSWORD, never for the OTA one under "Firmware
+  // aktualisieren": listening in is the everyday, half-asleep-at-3am action
+  // this should be frictionless for, while reflashing is rare and
+  // destructive. That asymmetry is the whole point of having two passwords -
+  // see config.h.
+  var LISTEN_PASS_KEY = 'noiselight_listen_pass';
+
+  function listenLoadSavedPass() {
+    try {
+      var saved = localStorage.getItem(LISTEN_PASS_KEY);
+      if (saved !== null) {
+        el('listen-pass').value = saved;
+        el('listen-remember').checked = true;
+      }
+    } catch (e) {}
+  }
+
+  function listenPersistPass() {
+    try {
+      if (el('listen-remember').checked) {
+        localStorage.setItem(LISTEN_PASS_KEY, el('listen-pass').value);
+      } else {
+        localStorage.removeItem(LISTEN_PASS_KEY);
+      }
+    } catch (e) {}
+  }
+
+  el('listen-remember').addEventListener('change', listenPersistPass);
+  listenLoadSavedPass();
+
+  function listenSetUi(state) {
+    // state: 'idle' | 'connecting' | 'playing' | 'error'
+    var busy = (state === 'connecting' || state === 'playing');
+    el('btn-listen-start').style.display = busy ? 'none' : '';
+    el('btn-listen-stop').style.display = busy ? '' : 'none';
+
+    // Mirror the state into the card header, so an active stream is visible
+    // from the top of the page without reading the hint line.
+    var val = el('listen-val');
+    val.classList.toggle('on', state === 'playing');
+    if (state === 'playing') {
+      val.removeAttribute('data-t');
+      val.textContent = t('listen.live');
+    } else if (state === 'connecting') {
+      val.removeAttribute('data-t');
+      val.textContent = t('listen.connecting');
+    } else {
+      val.setAttribute('data-t', 'listen.sub');
+      val.textContent = t('listen.sub');
+    }
+  }
+
+  function bytesToInt16Array(bytes) {
+    // DataView instead of a plain Int16Array view - the incoming chunk's
+    // byteOffset isn't guaranteed to be 2-byte-aligned, and this also
+    // pins down little-endian explicitly (matches the ESP32's native byte
+    // order, which is what the raw PCM bytes were written in).
+    var view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    var out = new Int16Array(bytes.length >> 1);
+    for (var i = 0; i < out.length; i++) {
+      out[i] = view.getInt16(i * 2, true);
+    }
+    return out;
+  }
+
+  function listenPlayChunk(int16Data) {
+    if (!listenAudioCtx || int16Data.length === 0) return;
+    var buffer = listenAudioCtx.createBuffer(1, int16Data.length, LISTEN_SAMPLE_RATE);
+    var channel = buffer.getChannelData(0);
+    for (var i = 0; i < int16Data.length; i++) {
+      channel[i] = int16Data[i] / 32768;
+    }
+    var source = listenAudioCtx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(listenAudioCtx.destination);
+    var now = listenAudioCtx.currentTime;
+    if (listenNextStartTime < now) listenNextStartTime = now;
+    source.start(listenNextStartTime);
+    listenNextStartTime += buffer.duration;
+  }
+
+  function listenStop() {
+    listenActive = false;
+    if (listenReader) {
+      try { listenReader.cancel(); } catch (e) {}
+      listenReader = null;
+    }
+    listenSetUi('idle');
+  }
+
+  el('btn-listen-stop').addEventListener('click', function() {
+    listenStop();
+    el('listen-status').textContent = '';
+  });
+
+  el('btn-listen-start').addEventListener('click', function() {
+    if (listenActive) return;
+    var password = el('listen-pass').value;
+
+    // Re-persist here too, not just on the checkbox: the usual order is to
+    // tick "remember" first and type the password afterwards.
+    listenPersistPass();
+
+    if (!listenAudioCtx) {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      listenAudioCtx = new AC();
+    }
+    if (listenAudioCtx.state === 'suspended') listenAudioCtx.resume();
+
+    listenActive = true;
+    listenNextStartTime = 0;
+    listenSetUi('connecting');
+    el('listen-status').textContent = t('listen.connecting');
+
+    // Deliberately fetch() + Web Audio API instead of a plain <audio src>
+    // element - Basic-Auth headers aren't reliably settable on <audio>,
+    // and this endpoint lives on its own port/protocol, not a URL a
+    // browser could just navigate to unauthenticated anyway.
+    var url = 'http://' + location.hostname + ':' + LISTEN_PORT + '/listen';
+    // LIVE_USERNAME / LIVE_PASSWORD from config.h - a different credential
+    // from the one /update uses, on purpose.
+    fetch(url, { headers: { Authorization: 'Basic ' + btoa('admin:' + password) } })
+      .then(function(res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        listenSetUi('playing');
+        el('listen-status').textContent = t('listen.playing');
+        listenReader = res.body.getReader();
+
+        // An Int16 sample can straddle two fetch chunks - carry the odd
+        // trailing byte over to the next read() instead of dropping it.
+        var leftover = null;
+
+        function pump() {
+          if (!listenActive || !listenReader) return;
+          listenReader.read().then(function(result) {
+            if (result.done) {
+              listenStop();
+              el('listen-status').textContent = t('listen.ended');
+              return;
+            }
+            var bytes = result.value;
+            if (leftover) {
+              var merged = new Uint8Array(leftover.length + bytes.length);
+              merged.set(leftover, 0);
+              merged.set(bytes, leftover.length);
+              bytes = merged;
+              leftover = null;
+            }
+            var usableLen = bytes.length - (bytes.length % 2);
+            if (usableLen < bytes.length) leftover = bytes.slice(usableLen);
+            if (usableLen > 0) listenPlayChunk(bytesToInt16Array(bytes.subarray(0, usableLen)));
+            pump();
+          }).catch(function() {
+            listenStop();
+          });
+        }
+        pump();
+      })
+      .catch(function() {
+        listenSetUi('error');
+        listenActive = false;
+        el('listen-status').textContent = '✗ ' + t('listen.fail');
+      });
   });
 
   // ---- Config export/import ----
@@ -2011,15 +2549,17 @@ const char* html_ui = R"rawliteral(
   });
 
   // ---- fetch loops ----
+  //
+  // Each of these returns its promise so poll() below can chain off it.
   function fetchStatus() {
-    fetch('/api/status').then(function(res) { return res.json(); }).then(function(data) {
+    return fetch('/api/status').then(function(res) { return res.json(); }).then(function(data) {
       lastStatus = data;
       renderLive();
     }).catch(function() {});
   }
 
   function fetchHistory() {
-    fetch('/api/history').then(function(res) { return res.json(); }).then(function(data) {
+    return fetch('/api/history').then(function(res) { return res.json(); }).then(function(data) {
       if (Array.isArray(data) && data.length >= 2) {
         lastHistory = data;
         renderHistory();
@@ -2029,7 +2569,7 @@ const char* html_ui = R"rawliteral(
   }
 
   function fetchHourly() {
-    fetch('/api/hourly').then(function(res) { return res.json(); }).then(function(data) {
+    return fetch('/api/hourly').then(function(res) { return res.json(); }).then(function(data) {
       lastHourly = data;
       renderHourly();
     }).catch(function() {});
@@ -2055,6 +2595,11 @@ const char* html_ui = R"rawliteral(
       el('color-normal').value = '#' + ('000000' + data.color_normal.toString(16).toUpperCase()).slice(-6);
       el('color-warning').value = '#' + ('000000' + data.color_warning.toString(16).toUpperCase()).slice(-6);
       el('color-alert').value = '#' + ('000000' + data.color_alert.toString(16).toUpperCase()).slice(-6);
+      el('baby-trigger-slider').value = Math.round(data.babyphone_trigger_db);
+      el('baby-sustain-slider').value = data.babyphone_sustain_s;
+      el('baby-clear-slider').value = data.babyphone_clear_s;
+      el('baby-bright-slider').value = data.babyphone_night_brightness;
+      el('baby-color').value = '#' + ('000000' + data.babyphone_night_color.toString(16).toUpperCase()).slice(-6);
       renderLichtSummaries();
       renderLive();
     }).catch(function() {});
@@ -2068,14 +2613,49 @@ const char* html_ui = R"rawliteral(
     if (lastConfig) renderLichtSummaries();
   }
 
+  // Polling loop, deliberately NOT setInterval.
+  //
+  // setInterval fires on a fixed schedule whether or not the previous
+  // response ever came back. The device serves every request from a SINGLE
+  // task (WebTask, which also pumps MQTT and ArduinoOTA), so when it is
+  // briefly busy - an MQTT reconnect to an unreachable broker blocks there
+  // for up to MQTT_SOCKET_TIMEOUT_S - the browser keeps firing anyway and
+  // builds a backlog that then drains all at once. In DevTools that shows up
+  // as a staircase of 1.6s / 1.4s / 1.25s ... response times for 0.2KB
+  // replies, i.e. queueing delay, not server work.
+  //
+  // Chaining the next request off the completion of the previous one makes
+  // the client self-throttling: a slow device is simply polled less often,
+  // and there is never more than one request per endpoint in flight.
+  //
+  // Also pauses entirely while the tab is hidden - a phone left on this page
+  // overnight would otherwise hammer the device until the battery dies - and
+  // fires immediately when it becomes visible again, so the display is
+  // current the moment you look at it.
+  function poll(fn, intervalMs) {
+    var timer = null, inflight = false;
+    function schedule() { inflight = false; timer = setTimeout(run, intervalMs); }
+    function run() {
+      clearTimeout(timer);
+      if (inflight) return;  // e.g. a visibilitychange landing mid-request
+      if (document.hidden) { schedule(); return; }
+      inflight = true;
+      fn().then(schedule, schedule);
+    }
+    document.addEventListener('visibilitychange', function() {
+      if (!document.hidden) run();
+    });
+    run();
+  }
+
   fetchConfig();
   fetchNetwork();
-  fetchStatus();
-  setInterval(fetchStatus, 200);
-  fetchHistory();
-  setInterval(fetchHistory, 5000);
-  fetchHourly();
-  setInterval(fetchHourly, 60000);
+  // 500ms, not 200ms: the firmware only produces a new measurement every
+  // 125ms and the meter/needle now interpolate in CSS between updates, so a
+  // faster poll bought nothing visible while costing 5 requests/second.
+  poll(fetchStatus, 500);
+  poll(fetchHistory, 5000);
+  poll(fetchHourly, 60000);
 
   applyLang();
 })();
