@@ -1349,6 +1349,9 @@ const char* html_ui = R"rawliteral(
       padding:14px 16px 20px;border-top:1px solid var(--line);
       font-family:var(--mono);font-size:10.5px;color:var(--ink-3);display:flex;flex-wrap:wrap;gap:4px 12px;
     }
+    .ui-foot b{color:var(--ink-2);font-weight:600}
+    .ui-foot a{color:var(--ink-3);text-decoration:underline;text-underline-offset:2px}
+    .ui-foot a:hover{color:var(--ink)}
 
     @media (min-width:860px){
       .ui-pad{display:grid;grid-template-columns:minmax(0,380px) minmax(0,1fr);gap:20px;align-items:start}
@@ -1453,28 +1456,38 @@ const char* html_ui = R"rawliteral(
     <!-- RIGHT: settings drawers -->
     <div class="ui-col">
 
+      <!-- Operating mode: its own card above "Licht" rather than a drawer
+           inside it. Babyphone isn't a lighting preference - it changes what
+           the whole device does (night light + MQTT alarm + live listen),
+           and burying it under "Licht" made that read as an LED style.
+           Applies immediately on click, so the status card at the top and the
+           actual device can't drift apart the way they did when this shared
+           the "Lichteinstellungen speichern" button. -->
+      <div class="ui-grouptitle" data-t="group.mode">Betriebsart</div>
+      <div class="ui-card">
+        <div class="ui-sum"><b data-t="mode.summary">Anzeigemodus</b><span class="ui-val" id="mode-val">--</span></div>
+        <div class="ui-body">
+          <div class="ui-choice">
+            <button type="button" class="ui-opt" id="opt-mode-0" data-mode="0">
+              <div class="ui-optt"><i class="ui-radio"></i><span data-t="mode.traffic">Ampel</span></div>
+              <small data-t="mode.traffic.desc">Der ganze Streifen leuchtet gr&uuml;n, gelb oder rot.</small>
+            </button>
+            <button type="button" class="ui-opt" id="opt-mode-1" data-mode="1">
+              <div class="ui-optt"><i class="ui-radio"></i><span data-t="mode.vu">VU-Meter</span></div>
+              <small data-t="mode.vu.desc">Der Ausschlag w&auml;chst mit der Lautst&auml;rke.</small>
+            </button>
+            <button type="button" class="ui-opt" id="opt-mode-2" data-mode="2">
+              <div class="ui-optt"><i class="ui-radio"></i><span data-t="mode.baby">Babyphone</span></div>
+              <small data-t="mode.baby.desc">Warmes Nachtlicht, Alarm nur per MQTT/Home Assistant.</small>
+            </button>
+          </div>
+          <div class="ui-hint" data-t="mode.instant">Wird sofort &uuml;bernommen - kein Speichern n&ouml;tig.</div>
+          <div class="ui-saved" id="save-mode-status"></div>
+        </div>
+      </div>
+
       <div class="ui-grouptitle" data-t="group.licht">Licht</div>
       <div class="ui-card">
-
-        <details class="ui-d" id="d-mode">
-          <summary class="ui-sum"><b data-t="mode.summary">Anzeigemodus</b><span class="ui-val" id="mode-val">--</span><i class="ui-chev"></i></summary>
-          <div class="ui-body">
-            <div class="ui-choice">
-              <button type="button" class="ui-opt" id="opt-mode-0" data-mode="0">
-                <div class="ui-optt"><i class="ui-radio"></i><span data-t="mode.traffic">Ampel</span></div>
-                <small data-t="mode.traffic.desc">Der ganze Streifen leuchtet gr&uuml;n, gelb oder rot.</small>
-              </button>
-              <button type="button" class="ui-opt" id="opt-mode-1" data-mode="1">
-                <div class="ui-optt"><i class="ui-radio"></i><span data-t="mode.vu">VU-Meter</span></div>
-                <small data-t="mode.vu.desc">Der Ausschlag w&auml;chst mit der Lautst&auml;rke.</small>
-              </button>
-              <button type="button" class="ui-opt" id="opt-mode-2" data-mode="2">
-                <div class="ui-optt"><i class="ui-radio"></i><span data-t="mode.baby">Babyphone</span></div>
-                <small data-t="mode.baby.desc">Warmes Nachtlicht, Alarm nur per MQTT/Home Assistant.</small>
-              </button>
-            </div>
-          </div>
-        </details>
 
         <details class="ui-d" id="d-bright">
           <summary class="ui-sum"><b data-t="bright.summary">Helligkeit &amp; Farben</b><span class="ui-val" id="bright-val">--</span><i class="ui-chev"></i></summary>
@@ -1648,6 +1661,8 @@ const char* html_ui = R"rawliteral(
 
   <div class="ui-foot">
     <span id="fw-version">Firmware --</span>
+    <span>by <b>thenebu</b></span>
+    <a href="https://github.com/thenebu/noiselight" target="_blank" rel="noopener noreferrer">github.com/thenebu/noiselight</a>
   </div>
 </div>
 
@@ -1667,8 +1682,10 @@ const char* html_ui = R"rawliteral(
       'today.notsynced':'Uhrzeit noch nicht synchronisiert – Statistik startet, sobald das Gerät die Zeit per NTP erhalten hat.',
       'today.resetconfirm':'Statistik wirklich zurücksetzen?',
       'leg.normal':'Ruhig','leg.warning':'Laut','leg.alert':'Zu laut',
-      'group.licht':'Licht','group.netzwerk':'Netzwerk','group.geraet':'Gerät',
+      'group.licht':'Licht','group.netzwerk':'Netzwerk','group.geraet':'Gerät','group.mode':'Betriebsart',
       'mode.summary':'Anzeigemodus',
+      'mode.instant':'Wird sofort übernommen – kein Speichern nötig.',
+      'mode.saving':'wird übernommen…',
       'mode.traffic.desc':'Der ganze Streifen leuchtet grün, gelb oder rot.',
       'mode.vu.desc':'Der Ausschlag wächst mit der Lautstärke.',
       'mode.baby.desc':'Warmes Nachtlicht, Alarm nur per MQTT/Home Assistant.',
@@ -1755,8 +1772,10 @@ const char* html_ui = R"rawliteral(
       'today.notsynced':'Clock not yet synchronised – stats start once the device gets time via NTP.',
       'today.resetconfirm':'Really reset today’s stats?',
       'leg.normal':'Quiet','leg.warning':'Loud','leg.alert':'Too loud',
-      'group.licht':'Light','group.netzwerk':'Network','group.geraet':'Device',
+      'group.licht':'Light','group.netzwerk':'Network','group.geraet':'Device','group.mode':'Operating mode',
       'mode.summary':'Display mode',
+      'mode.instant':'Applied immediately – no saving needed.',
+      'mode.saving':'applying…',
       'mode.traffic.desc':'The whole strip glows green, yellow or red.',
       'mode.vu.desc':'The lit portion grows with volume.',
       'mode.baby.desc':'Warm night light, alarm only via MQTT/Home Assistant.',
@@ -2146,10 +2165,37 @@ const char* html_ui = R"rawliteral(
   ['color-normal', 'color-warning', 'color-alert', 'baby-color'].forEach(function(id) {
     el(id).addEventListener('input', onConfigInput);
   });
+  // Applying the mode on click, rather than collecting it into the "Licht"
+  // save, is what keeps the status card at the top of the page honest: it
+  // renders from lastConfig (what the DEVICE reports), and fetchConfig() only
+  // runs at page load, so a mode picked here used to stay invisible up there
+  // until the next reload. Now the POST is followed by a fetchConfig(), and
+  // the tile is also updated optimistically so it reacts on the same frame
+  // as the radio button.
   [0, 1, 2].forEach(function(m) {
     el('opt-mode-' + m).addEventListener('click', function() {
       setModeUi(m);
-      onConfigInput();
+      renderLichtSummaries();
+
+      if (lastConfig) {
+        lastConfig.display_mode = m;
+        renderLive();
+      }
+
+      var status = el('save-mode-status');
+      status.textContent = t('mode.saving');
+      fetch('/api/config', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ display_mode: m })
+      }).then(function(res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        status.textContent = '\u2713 ' + t('save.ok') + new Date().toLocaleTimeString();
+        fetchConfig();   // re-sync from the device, in case it clamped anything
+      }).catch(function() {
+        status.textContent = '\u2717 ' + t('save.fail');
+      }).then(function() {
+        setTimeout(function() { status.textContent = ''; }, 4000);
+      });
     });
   });
   el('btn-floor-current').addEventListener('click', function() {
@@ -2169,7 +2215,9 @@ const char* html_ui = R"rawliteral(
 
   el('btn-save-licht').addEventListener('click', function() {
     var body = {
-      display_mode: currentMode(),
+      // display_mode deliberately absent - the Betriebsart card owns it and
+      // applies it on click. Sending it from here too would mean a stale
+      // radio state could quietly overwrite a mode set elsewhere.
       db_floor: parseInt(el('floor-slider').value, 10),
       db_normal_switchover: parseInt(el('green-slider').value, 10),
       db_warning_switchover: parseInt(el('yellow-slider').value, 10),
