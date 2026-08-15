@@ -1137,6 +1137,13 @@ const char* html_ui = R"rawliteral(
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>noiselight</title>
+  <!-- Favicon as an inline data-URI SVG rather than a /favicon.ico route.
+       A route would mean another handler on the single WebTask plus a binary
+       blob in flash, and this way the browser never issues the request at
+       all. Three rising bars in the UI's own --quiet/--warn/--alert colours,
+       which is legible down to 16px in a way the actual meter would not be.
+       The '#' in each colour must be percent-encoded inside a data: URI. -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230F1512'/><rect x='6' y='19' width='5' height='8' rx='2.5' fill='%232F9E5F'/><rect x='13.5' y='12' width='5' height='15' rx='2.5' fill='%23D89A18'/><rect x='21' y='5' width='5' height='22' rx='2.5' fill='%23D14C3C'/></svg>">
   <style>
     :root{
       --ground:#F3F5F0;
@@ -1883,6 +1890,18 @@ const char* html_ui = R"rawliteral(
 
   function fmtDb(v) { return (Math.round(v * 10) / 10).toFixed(1); }
 
+  // 24-hour HH:MM:SS, built by hand rather than left to
+  // toLocaleTimeString(): with no arguments that follows the BROWSER's
+  // locale, so the same device renders "23:10:45" for one household member
+  // and "11:10:45 PM" for another. The rest of the UI is 24-hour throughout
+  // (the hourly chart's 00-23 axis, "seit 00:00 Uhr"), so the locale default
+  // was the odd one out. Date's getters are local time, which is what these
+  // timestamps mean.
+  function fmtTime(d) {
+    function p(n) { return (n < 10 ? '0' : '') + n; }
+    return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+  }
+
   function applyLang() {
     document.documentElement.lang = lang;
     document.querySelectorAll('[data-t]').forEach(function(node) {
@@ -2035,7 +2054,7 @@ const char* html_ui = R"rawliteral(
 
     var sub = el('today-sub');
     if (data.reset_at) {
-      sub.textContent = t('today.since.prefix') + new Date(data.reset_at * 1000).toLocaleTimeString();
+      sub.textContent = t('today.since.prefix') + fmtTime(new Date(data.reset_at * 1000));
     } else {
       sub.textContent = t('today.sub');
     }
@@ -2189,7 +2208,7 @@ const char* html_ui = R"rawliteral(
         body: JSON.stringify({ display_mode: m })
       }).then(function(res) {
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        status.textContent = '\u2713 ' + t('save.ok') + new Date().toLocaleTimeString();
+        status.textContent = '\u2713 ' + t('save.ok') + fmtTime(new Date());
         fetchConfig();   // re-sync from the device, in case it clamped anything
       }).catch(function() {
         status.textContent = '\u2717 ' + t('save.fail');
@@ -2238,7 +2257,7 @@ const char* html_ui = R"rawliteral(
     }).then(function(res) {
       var status = el('save-licht-status');
       if (res.ok) {
-        status.textContent = '✓ ' + t('save.ok') + new Date().toLocaleTimeString();
+        status.textContent = '✓ ' + t('save.ok') + fmtTime(new Date());
       } else {
         status.textContent = '✗ ' + t('save.fail');
       }
