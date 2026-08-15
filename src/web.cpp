@@ -2333,6 +2333,10 @@ const char* html_ui = R"rawliteral(
   // C++ build can't inject #defines into this literal HTML/JS blob).
   var LISTEN_PORT = 8081;
   var LISTEN_SAMPLE_RATE = 16000;
+  // Jitter buffer: how far ahead of the audio clock chunks are scheduled,
+  // and the point at which accumulated clock drift is resynced away.
+  var LISTEN_LEAD = 0.2;
+  var LISTEN_MAX_LEAD = 0.8;
 
   var listenAudioCtx = null;
   var listenReader = null;
@@ -2420,8 +2424,20 @@ const char* html_ui = R"rawliteral(
     var source = listenAudioCtx.createBufferSource();
     source.buffer = buffer;
     source.connect(listenAudioCtx.destination);
+
     var now = listenAudioCtx.currentTime;
-    if (listenNextStartTime < now) listenNextStartTime = now;
+    // Chunks used to be scheduled at exactly currentTime on the first one,
+    // i.e. with zero margin - so every bit of WiFi jitter landed the next
+    // chunk in the past and played as a gap. Schedule LISTEN_LEAD ahead
+    // instead: the cost is a fifth of a second of extra latency, and in
+    // exchange normal network jitter is absorbed silently.
+    if (listenNextStartTime < now + 0.02) listenNextStartTime = now + LISTEN_LEAD;
+
+    // The ESP32's I2S clock and the browser's audio clock drift apart over a
+    // long session. If we've accumulated far more buffer than the lead we
+    // asked for, resync rather than letting latency grow without bound.
+    if (listenNextStartTime - now > LISTEN_MAX_LEAD) listenNextStartTime = now + LISTEN_LEAD;
+
     source.start(listenNextStartTime);
     listenNextStartTime += buffer.duration;
   }

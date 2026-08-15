@@ -49,15 +49,163 @@ static inline int32_t rawSampleAt(int i) {
 // pass only runs while somebody is actually listening.
 static int16_t stream_chunk[SAMPLES_CHUNK / 3];
 
-// Per-block auto-gain for the live-listen stream: the mic is calibrated for
-// accurate dB *measurement* (MIC_REF_DB/MIC_OVERLOAD_DB give it a lot of
-// headroom), so even a loud cry only occupies a small fraction of the
-// 24-bit range - a plain bit-depth shift to 16-bit PCM (what this used to
-// do) is close to inaudible. Instead, scale each 125ms block so its peak
-// sample hits AGC_TARGET_PEAK, capped at AGC_MAX_GAIN so near-silence
-// doesn't get amplified into audible hiss.
-static const float AGC_TARGET_PEAK = 24000.0f;  // ~-2.4dBFS, headroom against in-block transients
-static const float AGC_MAX_GAIN = 4000.0f;       // ~72dB ceiling - keeps silence quiet
+//============================================
+// Live-listen signal chain (48kHz raw -> 16kHz 16-bit PCM)
+//
+//   raw 24-bit  ->  FIR lowpass + decimate-by-3  ->  DC/rumble highpass
+//               ->  envelope-follower AGC with downward expander  ->  int16
+//
+// Everything here runs only while somebody is actually listening (gated on
+// AudioStreamService::isStreamingActive()) and deliberately taps the RAW
+// samples, before the equalizer/A-weighting filters that exist for dB
+// *measurement* and would make speech sound dull.
+//============================================
+
+// --- Anti-alias decimation filter ---
+//
+// This used to be a 3-tap boxcar average, which is a terrible anti-alias
+// filter for 48k -> 16k: it only attenuates ~3.5dB at 8kHz, so the entire
+// 8-16kHz band folded back down into the audible range. That fold-down is
+// what gave the stream its metallic, "recorded in an empty hall" character.
+//
+// Hamming-windowed sinc instead. The tap count is what decides how much of
+// the passband survives, and getting it wrong is audible: the first version
+// of this filter used 31 taps, whose transition band is 3.3*fs/N = 5.1kHz
+// wide. Centred on a 5.5kHz cutoff that means the roll-off already starts
+// around 3kHz and is ~20dB down by 5kHz - it eats the entire consonant range,
+// which is exactly the "voice sounds muffled, like it's behind a wall"
+// complaint. Aliasing was fixed; intelligibility was traded away for it.
+//
+// 63 taps narrows the transition to ~2.5kHz, so with a 6.7kHz cutoff the
+// passband stays flat to ~5.4kHz and the stopband still starts at 7.96kHz,
+// just under the 8kHz output Nyquist. Both ends satisfied.
+//
+// Costs ~2M MAC/s (two passes over 1000 output samples, 16x/second) - a few
+// percent of one core on an FPU-equipped S3, and only while somebody listens.
+#define STREAM_DECIM 3
+#define STREAM_FIR_TAPS 63
+#define STREAM_FIR_ORDER (STREAM_FIR_TAPS - 1)
+static float fir_coef[STREAM_FIR_TAPS];
+static bool fir_ready = false;
+
+// Tail of the previous raw block (24-bit domain), so the FIR window at the
+// start of a block is filled with real history rather than zeros - otherwise
+// every 62.5ms block boundary would produce an audible click.
+static float fir_hist[STREAM_FIR_ORDER];
+
+// --- DC / rumble highpass, applied at 16kHz after decimation ---
+//
+// The INMP441 has substantial sub-100Hz output (its own noise plus whatever
+// the enclosure picks up structurally) that carries no useful information
+// for a baby monitor but eats headroom and makes everything sound boomy.
+//
+// 80Hz rather than the 120Hz this started at: a male speaking fundamental
+// sits around 100-120Hz, so the higher corner was cutting into the voice
+// itself and thinning it out - which stacks with a dull top end into the
+// same "behind a wall" impression. 80Hz still clears the rumble.
+// One-pole highpass, exp(-2*pi*80/16000).
+static const float STREAM_HPF_A = 0.969f;   // ~80Hz corner at 16kHz
+static float hpf_x1 = 0.0f, hpf_y1 = 0.0f;
+
+// --- AGC ---
+//
+// The mic is calibrated for accurate dB measurement (MIC_REF_DB /
+// MIC_OVERLOAD_DB leave it a lot of headroom), so even a loud cry occupies
+// only a small fraction of the 24-bit range and a plain bit-depth shift to
+// 16-bit PCM is nearly inaudible. Some auto-gain is therefore unavoidable.
+//
+// What it must NOT do is what the previous version did: peak-normalise every
+// 62.5ms block on its own with an instant release and a 72dB ceiling. In a
+// quiet room that pushes the noise floor to full scale within one block, and
+// the gain then lurches back down the moment anyone speaks - the pumping,
+// room-tone-forward sound the "empty hall" impression comes from.
+//
+// Instead:
+//   * an RMS envelope with instant attack but a ~2s release, so the gain no
+//     longer rides up during every pause between sounds;
+//   * a downward expander below AGC_KNEE_DB - quiet room tone stays quiet
+//     (2:1 below the knee) instead of being normalised like real signal;
+//   * gain ramped across the block instead of stepped at the boundary,
+//     which removes the per-block zipper noise;
+//   * no lower clamp on the gain, so loud sounds are turned DOWN to fit
+//     rather than hard-clipped (the old `gain < 1.0f -> 1.0f` clamp meant
+//     every loud cry was delivered as a square wave).
+//
+// The knee is expressed in dB SPL and converted using the SAME relation
+// rmsToDb() uses, rather than being a magic amplitude constant. That matters:
+// the first attempt at this set the knee to a hand-estimated raw amplitude
+// which turned out to sit ~24dB too low, so a 36dB-SPL dishwasher three
+// metres away was still being normalised to full scale and came back as a
+// roar. Deriving it from MIC_REF_AMPL/MIC_REF_DB/MIC_OFFSET_DB keeps it
+// automatically consistent with the meter's calibration - if MIC_REF_DB is
+// ever re-calibrated, the knee follows.
+
+// RMS the AGC normalises a signal to, in the 24-bit sample domain.
+// ~-15.5dBFS RMS, which still leaves ~15dB of crest headroom before the
+// clamp - speech peaks around 12-15dB above its own RMS.
+static const float AGC_TARGET_RMS = 5500.0f;
+
+// Below this SPL, the input is treated as room tone rather than as something
+// worth normalising. 48dB is roughly "quiet living room with appliances
+// running": above it (speech, crying, a door) the AGC brings things up to a
+// consistent level; below it the expander lets them fall away. THIS is the
+// knob to turn if live-listen feels too sensitive (raise it) or too deaf
+// (lower it).
+static const float AGC_KNEE_DB = 48.0f;
+
+// rms such that rmsToDb(rms) == AGC_KNEE_DB - the inverse of the formula in
+// rmsToDb(): dB = MIC_OFFSET_DB + MIC_REF_DB + 20*log10(rms / MIC_REF_AMPL).
+static const float AGC_KNEE_RMS =
+  (float)(MIC_REF_AMPL * pow(10.0, (AGC_KNEE_DB - MIC_OFFSET_DB - MIC_REF_DB) / 20.0));
+
+// Gain applied exactly at the knee, and the ceiling for everything below it.
+static const float AGC_KNEE_GAIN = AGC_TARGET_RMS / AGC_KNEE_RMS;
+
+// Per-block envelope release: exp(-62.5ms / 2000ms).
+static const float AGC_RELEASE = 0.969f;
+
+static float stream_env = 0.0f;    // RMS envelope, 24-bit domain
+static float stream_gain = 0.0f;   // gain at the end of the previous block
+static bool stream_was_active = false;
+
+// Builds the decimation filter's coefficients on first use (rather than a
+// hardcoded table) - they depend on SAMPLE_RATE and STREAM_DECIM, and this
+// runs exactly once, the first time somebody starts listening.
+static void streamFirInit() {
+  const int M = STREAM_FIR_ORDER;
+  const float fc = 6700.0f / (float)SAMPLE_RATE;  // cycles/sample
+  float sum = 0.0f;
+
+  for (int n = 0; n <= M; n++) {
+    float m = (float)n - (float)M / 2.0f;
+    float sinc = (fabsf(m) < 1e-6f) ? (2.0f * fc)
+                                    : sinf(2.0f * (float)PI * fc * m) / ((float)PI * m);
+    float w = 0.54f - 0.46f * cosf(2.0f * (float)PI * (float)n / (float)M);  // Hamming
+    fir_coef[n] = sinc * w;
+    sum += fir_coef[n];
+  }
+  // Normalise to unity DC gain so the filter neither boosts nor attenuates
+  // the signal level the AGC below is calibrated against.
+  for (int n = 0; n <= M; n++) fir_coef[n] /= sum;
+  fir_ready = true;
+}
+
+// One decimated output sample: the FIR window for output k spans raw samples
+// [k*3 - M .. k*3], reaching into fir_hist for the negative indices. Reads
+// only - the history is updated once, after both passes, so pass 1 and pass 2
+// see identical input and produce identical output.
+static inline float streamFirAt(int k) {
+  const int M = STREAM_FIR_ORDER;
+  const int base = k * STREAM_DECIM - M;
+  float acc = 0.0f;
+  for (int t = 0; t <= M; t++) {
+    int j = base + t;
+    float v = (j >= 0) ? (float)(rawSampleAt(j) >> (SAMPLE_BITS - MIC_BITS))
+                       : fir_hist[M + j];
+    acc += fir_coef[t] * v;
+  }
+  return acc;
+}
 
 //
 // SOS IIR FILTER COEFFICIENTS
@@ -270,12 +418,10 @@ void Microphone::i2sReaderTask() {
   float acc_sum_sqr_SPL = 0;
   float acc_sum_sqr_weighted = 0;
 
-  // Sliding peak across the last SAMPLES_CHUNKS_PER_WINDOW blocks, so the
-  // live-listen AGC keeps reacting over a 125ms horizon rather than
-  // re-deciding its gain twice as often (which would be audible as faster
-  // pumping). Costs 4 bytes instead of the 8KB buffer the old per-block
-  // implementation needed.
-  int32_t prev_stream_peak = 0;
+  // The live-listen AGC's state (envelope, gain, filter history) lives in the
+  // file-scope statics next to the signal chain itself, not here - it has to
+  // survive across listening sessions' worth of blocks and is reset from
+  // stream_was_active when a new listener connects.
 
   while (true) {
     err = i2s_read(I2S_PORT, samples, bytes_wanted, &bytes_read, 500 / portTICK_PERIOD_MS);
@@ -298,47 +444,103 @@ void Microphone::i2sReaderTask() {
     // unnatural). Gated on isStreamingActive() so this is near-zero-cost
     // whenever nobody is listening.
     if (audio_stream.isStreamingActive()) {
-      // Pass 1: peak of the decimated, 24-bit-domain block. Measured before
-      // any quantization so the AGC gain below is computed against the true
-      // block peak, without needing an int32 scratch buffer to hold the
-      // intermediate values.
-      int32_t peak = 0;
-      for (int i = 0; i + 2 < SAMPLES_CHUNK; i += 3) {
-        int32_t avg = (rawSampleAt(i) + rawSampleAt(i + 1) + rawSampleAt(i + 2)) / 3;
-        // Same shift MIC_CONVERT uses (32-bit raw -> 24-bit sample).
-        int32_t s24 = avg >> (SAMPLE_BITS - MIC_BITS);
-        int32_t a = s24 < 0 ? -s24 : s24;
-        if (a > peak) peak = a;
+      if (!fir_ready) streamFirInit();
+
+      // First block of a new listening session: start from a clean slate so
+      // no stale filter tail or envelope from the last session bleeds in.
+      if (!stream_was_active) {
+        memset(fir_hist, 0, sizeof(fir_hist));
+        hpf_x1 = hpf_y1 = 0.0f;
+        stream_env = 0.0f;
+        stream_gain = 0.0f;   // fade up from silence over the first block
+        stream_was_active = true;
       }
 
-      // Per-window AGC (see the constants above) - scale this block so the
-      // loudest sample of the last ~125ms lands at AGC_TARGET_PEAK, then
-      // quantize to 16-bit with saturation (a sample above that peak, e.g.
-      // right at a transient's edge, must clip cleanly rather than wrap).
-      // Taking the max with the previous block's peak gives fast attack
-      // (a new transient lowers the gain immediately) and a one-block
-      // release, instead of letting the gain jump on every 62.5ms block.
-      int32_t agc_peak = (peak > prev_stream_peak) ? peak : prev_stream_peak;
-      prev_stream_peak = peak;
+      const int out_n = SAMPLES_CHUNK / STREAM_DECIM;
 
-      float gain = (agc_peak > 0) ? (AGC_TARGET_PEAK / (float)agc_peak) : AGC_MAX_GAIN;
-      if (gain > AGC_MAX_GAIN) gain = AGC_MAX_GAIN;
-      if (gain < 1.0f) gain = 1.0f;
+      // Pass 1: run the full decimate+highpass chain to measure this block's
+      // RMS, on a *copy* of the highpass state so pass 2 can replay it from
+      // the same starting point. Two passes rather than a 4KB float scratch
+      // buffer - permanent RAM is scarcer here than CPU cycles.
+      //
+      // RMS rather than peak, so the level the AGC reacts to is the same
+      // quantity rmsToDb()/AGC_KNEE_DB are expressed in. A double
+      // accumulator because the squares reach ~1e13 and 1000 of them
+      // overflow a float's 7 significant digits long before the sum is done.
+      float hx1 = hpf_x1, hy1 = hpf_y1;
+      double sum_sqr = 0.0;
+      for (int k = 0; k < out_n; k++) {
+        float x = streamFirAt(k);
+        float y = STREAM_HPF_A * (hy1 + x - hx1);
+        hx1 = x;
+        hy1 = y;
+        sum_sqr += (double)y * (double)y;
+      }
+      float rms = (float)sqrt(sum_sqr / out_n);
 
-      // Pass 2: same decimation again, scaled and quantized straight into the
-      // 16-bit output buffer.
-      int out_i = 0;
-      for (int i = 0; i + 2 < SAMPLES_CHUNK; i += 3) {
-        int32_t avg = (rawSampleAt(i) + rawSampleAt(i + 1) + rawSampleAt(i + 2)) / 3;
-        float v = (float)(avg >> (SAMPLE_BITS - MIC_BITS)) * gain;
+      // Envelope: instant attack, ~2s release (see AGC_RELEASE).
+      stream_env *= AGC_RELEASE;
+      if (rms > stream_env) stream_env = rms;
+
+      // Above the knee, normalise to AGC_TARGET_RMS. Below it, hold the gain
+      // at its knee value and scale it down proportionally - a 2:1 downward
+      // expander, so 6dB less input becomes 12dB less output and room tone
+      // falls away instead of being lifted to full scale.
+      float target_gain;
+      if (stream_env >= AGC_KNEE_RMS) {
+        target_gain = AGC_TARGET_RMS / stream_env;
+      } else {
+        target_gain = AGC_KNEE_GAIN * (stream_env / AGC_KNEE_RMS);
+      }
+
+      // Pass 2: replay the identical chain, ramping the gain from where the
+      // previous block ended to the new target rather than stepping at the
+      // block boundary. A gain *decrease* is the response to something
+      // getting louder, so it ramps over the first eighth of the block
+      // (~8ms) to get out of the way of the transient; an increase is the
+      // slow release and ramps across the whole 62.5ms, where an abrupt
+      // change would be audible.
+      hx1 = hpf_x1;
+      hy1 = hpf_y1;
+      int ramp_n = (target_gain < stream_gain) ? (out_n / 8) : out_n;
+      if (ramp_n < 1) ramp_n = 1;
+      float g = stream_gain;
+      float dg = (target_gain - stream_gain) / (float)ramp_n;
+      for (int k = 0; k < out_n; k++) {
+        float x = streamFirAt(k);
+        float y = STREAM_HPF_A * (hy1 + x - hx1);
+        hx1 = x;
+        hy1 = y;
+
+        float v = y * g;
+        if (k < ramp_n) g += dg; else g = target_gain;
         if (v > 32767.0f) v = 32767.0f;
         if (v < -32768.0f) v = -32768.0f;
-        stream_chunk[out_i++] = (int16_t)v;
+        stream_chunk[k] = (int16_t)v;
+      }
+      hpf_x1 = hx1;
+      hpf_y1 = hy1;
+      stream_gain = target_gain;
+
+      // Carry this block's tail forward as the next block's FIR history.
+      // Must happen after both passes, and before the MIC_CONVERT loop below
+      // overwrites samples[] with floats.
+      for (int t = 0; t < STREAM_FIR_ORDER; t++) {
+        fir_hist[t] = (float)(rawSampleAt(SAMPLES_CHUNK - STREAM_FIR_ORDER + t)
+                              >> (SAMPLE_BITS - MIC_BITS));
       }
 
-      audio_stream.pushSamples(stream_chunk, out_i);
+      // ~every 2s while streaming: the level the AGC is actually seeing, in
+      // the same dB the meter shows, next to the gain it decided on. Makes
+      // AGC_KNEE_DB tunable from a serial log instead of by ear.
+      if (sample_count % 32 == 0) {
+        log_i("[AUDIO] env=%.1fdB gain=%.4f (knee %.1fdB)",
+              rmsToDb(stream_env), target_gain, AGC_KNEE_DB);
+      }
+
+      audio_stream.pushSamples(stream_chunk, out_n);
     } else {
-      prev_stream_peak = 0;  // don't carry a stale peak into the next session
+      stream_was_active = false;  // next session re-initialises the chain
     }
 
     // Convert the raw int32 samples to float in place - each element is read
