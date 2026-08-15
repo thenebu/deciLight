@@ -419,14 +419,6 @@ Wenn die Messwerte durchgehend abweichen:
 Dieses Projekt basiert auf [deciLight](https://github.com/bbbenji/deciLight) (GPL-3.0).
 Lizenziert unter der GNU General Public License v3.0.
 
-## 🎨 Geplante Erweiterungen
-
-- [ ] IR-Fernbedienung zur Schwellenwertanpassung
-- [ ] Mehrere Lärmzonen (Klassenzimmer-Netzwerk)
-- [ ] Anpassbare Farbzuordnung
-- [ ] Mehrtägiger Verlauf für die Tagesstatistik-Ansicht (aktuell nur ein Tag,
-      Reset um Mitternacht)
-
 ---
 
 ## English
@@ -827,10 +819,3 @@ If readings are consistently off:
 
 This project is adapted from [deciLight](https://github.com/bbbenji/deciLight) (GPL-3.0).
 Licensed under GNU General Public License v3.0.
-
-## 🎨 Future Enhancements
-
-- [ ] IR remote control for threshold adjustment
-- [ ] Multiple noise zones (classroom network)
-- [ ] Adjustable color mapping
-- [ ] Multi-day history for the Tagesstatistik view (currently single-day, resets at midnight)
