@@ -2332,7 +2332,7 @@ const char* html_ui = R"rawliteral(
   // AUDIO_STREAM_PORT/AUDIO_STREAM_SAMPLE_RATE in config.h by hand (the
   // C++ build can't inject #defines into this literal HTML/JS blob).
   var LISTEN_PORT = 8081;
-  var LISTEN_SAMPLE_RATE = 16000;
+  var LISTEN_SAMPLE_RATE = 24000;
   // Jitter buffer: how far ahead of the audio clock chunks are scheduled,
   // and the point at which accumulated clock drift is resynced away.
   var LISTEN_LEAD = 0.2;

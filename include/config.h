@@ -85,7 +85,9 @@ enum NoiseLevel {
 // RAM (12KB instead of 24KB, plus 2KB on the live-listen chunk).
 //
 // Must divide SAMPLES_SHORT evenly, and SAMPLES_CHUNK must stay divisible by
-// the live-listen decimation factor of 3 (6000 -> 3000 -> 1000, both exact).
+// the live-listen decimation factor of 2 (6000 -> 3000 -> 1500, both exact).
+// A static_assert in microphone.cpp enforces both that and the matching
+// SAMPLE_RATE / STREAM_DECIM == AUDIO_STREAM_SAMPLE_RATE relation.
 #define SAMPLES_CHUNK (SAMPLES_SHORT / 2)
 #define SAMPLES_CHUNKS_PER_WINDOW (SAMPLES_SHORT / SAMPLES_CHUNK)
 #define DMA_BANK_SIZE 256       // ~24 KB total DMA RAM instead of ~96 KB
@@ -117,7 +119,12 @@ constexpr double MIC_REF_AMPL = pow(10, double(MIC_SENSITIVITY) / 20) * ((1 << (
 // sharing the WebServer's port 80 / WebTask (see include/audio_stream.h for
 // the full rationale: no WebSocket/AsyncTCP dependency in this project).
 #define AUDIO_STREAM_PORT 8081
-#define AUDIO_STREAM_SAMPLE_RATE 16000   // downsampled from the mic's 48kHz
+// Downsampled from the mic's 48kHz by STREAM_DECIM (see microphone.cpp).
+// 24kHz, i.e. decimate-by-2: at 16kHz the 8kHz Nyquist was the binding limit
+// on how open speech could sound, no matter how good the anti-alias filter
+// got. 12kHz of bandwidth covers sibilance properly. Costs 50% more WiFi
+// (48KB/s) and 16KB more ring buffer than 16kHz did - both cheap here.
+#define AUDIO_STREAM_SAMPLE_RATE 24000
 // 1s (was 2s): the ring only has to bridge network hiccups between the mic
 // task's 125ms blocks and the stream task's 20ms drain loop, and every
 // buffered second is a second of added listening latency. Halving it halves
@@ -170,6 +177,6 @@ constexpr double MIC_REF_AMPL = pow(10, double(MIC_SENSITIVITY) / 20) * ((1 << (
 // Manually bumped on each release - not tied to git/build automatically.
 // Shown in the WebUI footer and published over MQTT, so an OTA update can
 // be confirmed to have actually taken.
-#define FIRMWARE_VERSION "1.6.3"
+#define FIRMWARE_VERSION "1.7.0"
 
 #endif // CONFIG_H

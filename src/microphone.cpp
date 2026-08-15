@@ -37,22 +37,11 @@ static inline int32_t rawSampleAt(int i) {
   return v;
 }
 
-// Decimate-by-3 (48kHz -> 16kHz) scratch buffer for the live-listen audio
-// stream tap (Babyphone Phase 2) - see the decimation block in
-// i2sReaderTask(). Only ever touched by that one task.
-//
-// There used to be a second, int32 "stream_chunk24" buffer here holding the
-// pre-gain 24-bit-domain values, so the per-block AGC peak could be measured
-// before quantizing to 16-bit. That is now a two-pass scan over the raw block
-// instead (peak first, then decimate+scale straight into this buffer), which
-// is bit-for-bit identical output for 8KB less permanent RAM - and the extra
-// pass only runs while somebody is actually listening.
-static int16_t stream_chunk[SAMPLES_CHUNK / 3];
 
 //============================================
-// Live-listen signal chain (48kHz raw -> 16kHz 16-bit PCM)
+// Live-listen signal chain (48kHz raw -> AUDIO_STREAM_SAMPLE_RATE 16-bit PCM)
 //
-//   raw 24-bit  ->  FIR lowpass + decimate-by-3  ->  DC/rumble highpass
+//   raw 24-bit  ->  FIR lowpass + decimate by STREAM_DECIM  ->  rumble highpass
 //               ->  envelope-follower AGC with downward expander  ->  int16
 //
 // Everything here runs only while somebody is actually listening (gated on
@@ -64,8 +53,8 @@ static int16_t stream_chunk[SAMPLES_CHUNK / 3];
 // --- Anti-alias decimation filter ---
 //
 // This used to be a 3-tap boxcar average, which is a terrible anti-alias
-// filter for 48k -> 16k: it only attenuates ~3.5dB at 8kHz, so the entire
-// 8-16kHz band folded back down into the audible range. That fold-down is
+// filter for decimating 48kHz: it only attenuates ~3.5dB at the old 8kHz
+// output Nyquist, so a whole octave folded back into the audible range. That
 // what gave the stream its metallic, "recorded in an empty hall" character.
 //
 // Hamming-windowed sinc instead. The tap count is what decides how much of
@@ -76,14 +65,33 @@ static int16_t stream_chunk[SAMPLES_CHUNK / 3];
 // which is exactly the "voice sounds muffled, like it's behind a wall"
 // complaint. Aliasing was fixed; intelligibility was traded away for it.
 //
-// 63 taps narrows the transition to ~2.5kHz, so with a 6.7kHz cutoff the
-// passband stays flat to ~5.4kHz and the stopband still starts at 7.96kHz,
-// just under the 8kHz output Nyquist. Both ends satisfied.
+// 63 taps narrows the transition to ~2.5kHz, which leaves room for a cutoff
+// high enough to keep the passband flat well past the consonant range while
+// the stopband still lands under the output Nyquist.
 //
-// Costs ~2M MAC/s (two passes over 1000 output samples, 16x/second) - a few
+// Costs ~3M MAC/s (two passes over 1500 output samples, 16x/second) - a few
 // percent of one core on an FPU-equipped S3, and only while somebody listens.
-#define STREAM_DECIM 3
+#define STREAM_DECIM 2
 #define STREAM_FIR_TAPS 63
+
+// The decimation factor, the stream rate and the block size have to agree, and
+// silently disagreeing would show up as garbled audio rather than a build
+// error. Cheaper to assert it.
+static_assert(SAMPLE_RATE / STREAM_DECIM == AUDIO_STREAM_SAMPLE_RATE,
+              "AUDIO_STREAM_SAMPLE_RATE must equal SAMPLE_RATE / STREAM_DECIM");
+static_assert(SAMPLES_CHUNK % STREAM_DECIM == 0,
+              "SAMPLES_CHUNK must divide evenly by STREAM_DECIM");
+
+// Output scratch buffer for one decimated block, handed straight to
+// AudioStreamService::pushSamples(). Only ever touched by the I2S task.
+//
+// There used to be a second, int32 "stream_chunk24" buffer alongside it
+// holding the pre-gain 24-bit-domain values, so the AGC could measure the
+// block before it was quantized to 16-bit. That is a second pass over the
+// raw block now instead (measure, then filter+scale straight into this
+// buffer), which is identical output for 8KB less permanent RAM - and the
+// extra pass only runs while somebody is actually listening.
+static int16_t stream_chunk[SAMPLES_CHUNK / STREAM_DECIM];
 #define STREAM_FIR_ORDER (STREAM_FIR_TAPS - 1)
 static float fir_coef[STREAM_FIR_TAPS];
 static bool fir_ready = false;
@@ -93,7 +101,7 @@ static bool fir_ready = false;
 // every 62.5ms block boundary would produce an audible click.
 static float fir_hist[STREAM_FIR_ORDER];
 
-// --- DC / rumble highpass, applied at 16kHz after decimation ---
+// --- DC / rumble highpass, applied after decimation (at the stream rate) ---
 //
 // The INMP441 has substantial sub-100Hz output (its own noise plus whatever
 // the enclosure picks up structurally) that carries no useful information
@@ -103,8 +111,13 @@ static float fir_hist[STREAM_FIR_ORDER];
 // sits around 100-120Hz, so the higher corner was cutting into the voice
 // itself and thinning it out - which stacks with a dull top end into the
 // same "behind a wall" impression. 80Hz still clears the rumble.
-// One-pole highpass, exp(-2*pi*80/16000).
-static const float STREAM_HPF_A = 0.969f;   // ~80Hz corner at 16kHz
+//
+// The coefficient is computed from AUDIO_STREAM_SAMPLE_RATE in
+// streamFirInit() rather than written out as a literal - it was a hardcoded
+// 0.969 for 16kHz, and raising the stream rate would silently have moved the
+// corner to 120Hz again without anything failing to build.
+#define STREAM_HPF_CORNER_HZ 80.0f
+static float stream_hpf_a = 0.0f;
 static float hpf_x1 = 0.0f, hpf_y1 = 0.0f;
 
 // --- AGC ---
@@ -168,12 +181,27 @@ static float stream_env = 0.0f;    // RMS envelope, 24-bit domain
 static float stream_gain = 0.0f;   // gain at the end of the previous block
 static bool stream_was_active = false;
 
-// Builds the decimation filter's coefficients on first use (rather than a
-// hardcoded table) - they depend on SAMPLE_RATE and STREAM_DECIM, and this
-// runs exactly once, the first time somebody starts listening.
+// Builds the decimation filter's coefficients and the highpass coefficient on
+// first use (rather than as hardcoded tables) - they all depend on
+// SAMPLE_RATE and STREAM_DECIM, and this runs exactly once, the first time
+// somebody starts listening.
 static void streamFirInit() {
   const int M = STREAM_FIR_ORDER;
-  const float fc = 6700.0f / (float)SAMPLE_RATE;  // cycles/sample
+
+  // Cutoff is derived from the output Nyquist rather than named outright, so
+  // that changing STREAM_DECIM moves it automatically. A Hamming window's
+  // transition band is 3.3*fs/N wide; placing the cutoff half that width plus
+  // a small margin below Nyquist puts the stopband edge just inside it, which
+  // is the highest cutoff that still suppresses aliasing - and the higher the
+  // cutoff, the more of the top end survives.
+  const float nyquist = (float)AUDIO_STREAM_SAMPLE_RATE / 2.0f;
+  const float half_transition = 1.65f * (float)SAMPLE_RATE / (float)STREAM_FIR_TAPS;
+  const float fc = (nyquist - half_transition - 250.0f) / (float)SAMPLE_RATE;  // cycles/sample
+
+  // One-pole highpass at STREAM_HPF_CORNER_HZ, applied after decimation and
+  // therefore at the *output* rate.
+  stream_hpf_a = expf(-2.0f * (float)PI * STREAM_HPF_CORNER_HZ / (float)AUDIO_STREAM_SAMPLE_RATE);
+
   float sum = 0.0f;
 
   for (int n = 0; n <= M; n++) {
@@ -471,7 +499,7 @@ void Microphone::i2sReaderTask() {
       double sum_sqr = 0.0;
       for (int k = 0; k < out_n; k++) {
         float x = streamFirAt(k);
-        float y = STREAM_HPF_A * (hy1 + x - hx1);
+        float y = stream_hpf_a * (hy1 + x - hx1);
         hx1 = x;
         hy1 = y;
         sum_sqr += (double)y * (double)y;
@@ -508,7 +536,7 @@ void Microphone::i2sReaderTask() {
       float dg = (target_gain - stream_gain) / (float)ramp_n;
       for (int k = 0; k < out_n; k++) {
         float x = streamFirAt(k);
-        float y = STREAM_HPF_A * (hy1 + x - hx1);
+        float y = stream_hpf_a * (hy1 + x - hx1);
         hx1 = x;
         hy1 = y;
 
