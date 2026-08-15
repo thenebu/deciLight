@@ -1517,7 +1517,12 @@ const char* html_ui = R"rawliteral(
     return (STR[lang] && STR[lang][key]) || key;
   }
 
-  function el(id) { return document.getElementById(id); }
+  // Cached lookup - renderLive() alone calls this ~20x per 200ms tick;
+  // re-querying getElementById() every time was measurably heavy enough on
+  // iOS Safari to delay native <details> toggle handling (fine on desktop's
+  // faster main thread, laggy - multi-second - on a phone).
+  var elCache = {};
+  function el(id) { return elCache[id] || (elCache[id] = document.getElementById(id)); }
 
   // ---- cached last-fetched data, re-rendered on language switch ----
   var lastStatus = null, lastConfig = null, lastNetwork = null, lastHourly = null, lastHistory = null;
@@ -1555,6 +1560,45 @@ const char* html_ui = R"rawliteral(
   });
 
   // ---- live status / meter ----
+  // Meter gradient only depends on cfg (thresholds), not on the live db
+  // reading - rebuilding this string 5x/sec (every fetchStatus tick) was
+  // pure waste and part of what made <details> toggles laggy on iPhone.
+  // Tracked so it's only rebuilt when the underlying thresholds change.
+  var meterGradientKey = null;
+
+  function renderMeterGradient(cfg, minDb, maxDb) {
+    var pctGreen = Math.max(0, Math.min(100, (cfg.db_normal_switchover - minDb) / (maxDb - minDb) * 100));
+    var pctYellow = Math.max(0, Math.min(100, (cfg.db_warning_switchover - minDb) / (maxDb - minDb) * 100));
+    var key = pctGreen + '|' + pctYellow;
+    if (key === meterGradientKey) return;
+    meterGradientKey = key;
+    el('meter-mask').parentElement.style.background = 'linear-gradient(90deg,' +
+      'var(--quiet) 0%, var(--quiet) ' + pctGreen + '%,' +
+      'var(--warn) ' + pctGreen + '%, var(--warn) ' + pctYellow + '%,' +
+      'var(--alert) ' + pctYellow + '%, var(--alert) 100%)';
+  }
+
+  // The "apply suggested floor" link's content only ever changes when
+  // suggested_floor itself changes (set once at boot) - rebuilding its
+  // innerHTML (and re-attaching a fresh click listener) on every 200ms tick
+  // was the other big contributor to the iPhone <details> lag.
+  var suggestedFloorRendered = null;
+
+  function renderSuggestedFloorHint() {
+    var hint = el('suggested-floor-hint');
+    if (lastStatus.suggested_floor === undefined) return;
+    if (suggestedFloorRendered === lastStatus.suggested_floor) return;
+    suggestedFloorRendered = lastStatus.suggested_floor;
+    hint.innerHTML = t('suggested.prefix') + fmtDb(lastStatus.suggested_floor) + ' dB – ' +
+      '<a href="#" id="apply-suggested-floor">' + t('suggested.apply') + '</a>';
+    hint.style.display = 'block';
+    el('apply-suggested-floor').addEventListener('click', function(e) {
+      e.preventDefault();
+      el('floor-slider').value = Math.round(lastStatus.suggested_floor);
+      onConfigInput();
+    });
+  }
+
   function renderLive() {
     if (!lastStatus || !lastConfig) return;
     var db = lastStatus.db;
@@ -1572,14 +1616,8 @@ const char* html_ui = R"rawliteral(
     var maxDb = Math.max(cfg.db_warning_switchover + 20, cfg.db_normal_switchover + 5, minDb + 10);
     var pct = Math.max(0, Math.min(1, (db - minDb) / (maxDb - minDb))) * 100;
 
-    var pctGreen = Math.max(0, Math.min(100, (cfg.db_normal_switchover - minDb) / (maxDb - minDb) * 100));
-    var pctYellow = Math.max(0, Math.min(100, (cfg.db_warning_switchover - minDb) / (maxDb - minDb) * 100));
+    renderMeterGradient(cfg, minDb, maxDb);
     el('meter-needle').style.left = pct + '%';
-    var meter = el('meter-mask').parentElement;
-    meter.style.background = 'linear-gradient(90deg,' +
-      'var(--quiet) 0%, var(--quiet) ' + pctGreen + '%,' +
-      'var(--warn) ' + pctGreen + '%, var(--warn) ' + pctYellow + '%,' +
-      'var(--alert) ' + pctYellow + '%, var(--alert) 100%)';
     el('meter-mask').style.clipPath = 'inset(0 0 0 ' + pct + '%)';
 
     el('scale-0').textContent = Math.round(minDb);
@@ -1597,18 +1635,7 @@ const char* html_ui = R"rawliteral(
 
     el('fw-version').textContent = t('foot.firmware') + (lastStatus.firmware || '--');
 
-    var hint = el('suggested-floor-hint');
-    if (lastStatus.suggested_floor !== undefined) {
-      hint.innerHTML = t('suggested.prefix') + fmtDb(lastStatus.suggested_floor) + ' dB – ' +
-        '<a href="#" id="apply-suggested-floor">' + t('suggested.apply') + '</a>';
-      hint.style.display = 'block';
-      var link = el('apply-suggested-floor');
-      if (link) link.addEventListener('click', function(e) {
-        e.preventDefault();
-        el('floor-slider').value = Math.round(lastStatus.suggested_floor);
-        onConfigInput();
-      });
-    }
+    renderSuggestedFloorHint();
 
     el('floor-current-hint').textContent = fmtDb(db) + ' dB';
   }

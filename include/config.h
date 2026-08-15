@@ -106,6 +106,6 @@ constexpr double MIC_REF_AMPL = pow(10, double(MIC_SENSITIVITY) / 20) * ((1 << (
 // Manually bumped on each release - not tied to git/build automatically.
 // Shown in the WebUI footer and published over MQTT, so an OTA update can
 // be confirmed to have actually taken.
-#define FIRMWARE_VERSION "1.3.0"
+#define FIRMWARE_VERSION "1.3.1"
 
 #endif // CONFIG_H
