@@ -922,837 +922,1137 @@ void WebService::saveHourlyStats() {
 
 // Embedded HTML UI (kept as static const for readability)
 const char* html_ui = R"rawliteral(
+
 <!DOCTYPE html>
-<html>
+<html lang="de">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>noiselight Config</title>
+  <title>noiselight</title>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 20px;
+    :root{
+      --ground:#F3F5F0;
+      --paper:#FFFFFF;
+      --paper-2:#E9ECE5;
+      --line:#D8DDD3;
+      --line-soft:#E6EAE1;
+      --ink:#141814;
+      --ink-2:#59615A;
+      --ink-3:#8B938B;
+      --quiet:#2F9E5F;
+      --warn:#D89A18;
+      --alert:#D14C3C;
+      --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+      --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
     }
-    .container {
-      background: white;
-      border-radius: 12px;
-      box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-      max-width: 500px;
-      width: 100%;
-      padding: 30px;
+    *{box-sizing:border-box}
+    html,body{margin:0;padding:0}
+    body{
+      background:var(--ground);color:var(--ink);font-family:var(--sans);
+      font-size:15px;line-height:1.45;-webkit-font-smoothing:antialiased;
     }
-    h1 {
-      color: #333;
-      margin-bottom: 30px;
-      font-size: 28px;
-      text-align: center;
+    .ui-wrap{max-width:1040px;margin:0 auto}
+
+    /* top bar */
+    .ui-top{
+      display:flex;align-items:center;gap:10px;
+      padding:13px 16px;border-bottom:1px solid var(--line);background:var(--paper);
     }
-    .section {
-      margin-bottom: 25px;
+    .ui-mark{display:flex;align-items:center;gap:9px;min-width:0}
+    .ui-lamp{width:11px;height:11px;border-radius:50%;background:var(--quiet);flex:none}
+    .ui-mark b{font-size:16px;font-weight:660;letter-spacing:-.02em}
+    .ui-spacer{flex:1}
+    .ui-lang{
+      display:flex;border:1px solid var(--line);border-radius:7px;overflow:hidden;flex:none;
+      font-family:var(--mono);font-size:11px;letter-spacing:.06em;cursor:pointer;background:none;
     }
-    .section-title {
-      font-size: 16px;
-      font-weight: 600;
-      color: #667eea;
-      margin-bottom: 12px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
+    .ui-lang span{padding:5px 10px;color:var(--ink-3);background:var(--paper)}
+    .ui-lang span.on{background:var(--ink);color:var(--paper);font-weight:600}
+
+    .ui-pad{padding:16px 16px 28px;display:flex;flex-direction:column;gap:14px}
+    .ui-col{display:flex;flex-direction:column;gap:14px;min-width:0}
+
+    /* live card */
+    .ui-live{
+      border:1px solid var(--line);border-radius:12px;padding:16px;background:var(--paper);
+      display:flex;flex-direction:column;gap:14px;
     }
-    label {
-      display: block;
-      margin-bottom: 8px;
-      color: #555;
-      font-size: 14px;
-      font-weight: 500;
+    .ui-live-row{display:flex;align-items:flex-end;gap:10px}
+    .ui-db{
+      font-family:var(--mono);font-size:52px;line-height:.85;font-weight:600;letter-spacing:-.04em;
+      font-variant-numeric:tabular-nums;color:var(--ink);
     }
-    input[type="radio"] {
-      margin-right: 8px;
+    .ui-db-u{font-family:var(--mono);font-size:15px;color:var(--ink-3);padding-bottom:3px}
+    .ui-pill{
+      margin-left:auto;display:inline-flex;align-items:center;gap:6px;
+      border-radius:999px;padding:4px 11px 4px 8px;font-size:12.5px;font-weight:600;
+      background:var(--paper-2);color:var(--ink-2);border:1px solid var(--line);
     }
-    .radio-group {
-      display: flex;
-      gap: 20px;
-      margin-bottom: 12px;
+    .ui-pill i{width:7px;height:7px;border-radius:50%;background:currentColor;display:block}
+    .ui-pill.g{color:var(--quiet);background:rgba(47,158,95,.14);border-color:rgba(47,158,95,.32)}
+    .ui-pill.y{color:var(--warn);background:rgba(216,154,24,.14);border-color:rgba(216,154,24,.32)}
+    .ui-pill.r{color:var(--alert);background:rgba(209,76,60,.14);border-color:rgba(209,76,60,.32)}
+
+    .ui-meter{position:relative;height:12px;border-radius:6px;overflow:hidden;background:var(--paper-2)}
+    .ui-meter-mask{position:absolute;inset:0;background:var(--paper-2);opacity:.82}
+    .ui-needle{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--ink);border-radius:2px}
+    .ui-scale{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10.5px;color:var(--ink-3);
+      font-variant-numeric:tabular-nums;margin-top:4px}
+    .ui-facts{display:flex;gap:0;border-top:1px solid var(--line-soft);padding-top:11px}
+    .ui-fact{flex:1;display:flex;flex-direction:column;gap:2px;min-width:0}
+    .ui-fact + .ui-fact{border-left:1px solid var(--line-soft);padding-left:12px}
+    .ui-fact em{font-style:normal;font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);font-family:var(--mono)}
+    .ui-fact b{font-family:var(--mono);font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;
+      white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+
+    /* card / drawers */
+    .ui-card{border:1px solid var(--line);border-radius:12px;background:var(--paper);overflow:hidden}
+    .ui-grouptitle{
+      font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;
+      color:var(--ink-3);padding:6px 2px 0;
     }
-    .radio-group label {
-      display: flex;
-      align-items: center;
-      margin: 0;
+    .ui-d{border-bottom:1px solid var(--line-soft)}
+    .ui-d:last-child{border-bottom:0}
+    .ui-sum{
+      display:flex;align-items:center;gap:10px;padding:13px 14px;cursor:pointer;list-style:none;
     }
-    input[type="range"] {
-      width: 100%;
-      height: 6px;
-      border-radius: 3px;
-      background: #ddd;
-      outline: none;
-      -webkit-appearance: none;
-      margin-bottom: 6px;
+    .ui-sum::-webkit-details-marker{display:none}
+    .ui-sum b{font-size:14.5px;font-weight:600;letter-spacing:-.005em}
+    .ui-sum .ui-val{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--ink-3);
+      font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:46%}
+    .ui-chev{width:9px;height:9px;border-right:1.6px solid var(--ink-3);border-bottom:1.6px solid var(--ink-3);
+      transform:rotate(45deg) translate(-2px,-2px);flex:none;margin-left:2px}
+    details[open] > .ui-sum .ui-chev{transform:rotate(-135deg) translate(-1px,-1px)}
+    .ui-body{padding:0 14px 16px;display:flex;flex-direction:column;gap:14px}
+
+    /* form atoms */
+    .ui-field{display:flex;flex-direction:column;gap:6px}
+    .ui-lab{font-size:12px;color:var(--ink-2);font-weight:550;display:flex;align-items:baseline;gap:8px}
+    .ui-lab .ui-num{margin-left:auto;font-family:var(--mono);font-size:12.5px;color:var(--ink);font-variant-numeric:tabular-nums}
+    .ui-hint{font-size:11.5px;color:var(--ink-3);line-height:1.4}
+    .ui-in{
+      border:1px solid var(--line);border-radius:8px;background:var(--paper);color:var(--ink);
+      padding:9px 11px;font-size:14px;font-family:var(--sans);width:100%;
     }
-    input[type="range"]::-webkit-slider-thumb {
-      -webkit-appearance: none;
-      appearance: none;
-      width: 18px;
-      height: 18px;
-      border-radius: 50%;
-      background: #667eea;
-      cursor: pointer;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    .ui-in.ui-mono{font-family:var(--mono);font-size:12.5px}
+    .ui-in::placeholder{color:var(--ink-3)}
+    .ui-row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .ui-row-btn{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+
+    /* range sliders */
+    input[type=range].ui-range{
+      -webkit-appearance:none;appearance:none;width:100%;height:22px;background:transparent;margin:0;
+      --pct:0%;
     }
-    input[type="range"]::-moz-range-thumb {
-      width: 18px;
-      height: 18px;
-      border-radius: 50%;
-      background: #667eea;
-      cursor: pointer;
-      border: none;
+    input[type=range].ui-range::-webkit-slider-runnable-track{
+      height:4px;border-radius:2px;border:1px solid var(--line-soft);
+      background:linear-gradient(var(--fill,var(--ink)),var(--fill,var(--ink))) 0/var(--pct) 100% no-repeat, var(--paper-2);
     }
-    .value-display {
-      text-align: right;
-      font-size: 13px;
-      color: #888;
-      font-weight: 500;
+    input[type=range].ui-range::-moz-range-track{
+      height:4px;border-radius:2px;border:1px solid var(--line-soft);background:var(--paper-2);
     }
-    .range-container {
-      margin-bottom: 15px;
+    input[type=range].ui-range::-moz-range-progress{
+      height:4px;border-radius:2px;background:var(--fill,var(--ink));
     }
-    .led-preview {
-      display: flex;
-      gap: 6px;
-      height: 40px;
-      border-radius: 6px;
-      overflow: hidden;
-      margin: 15px 0;
-      box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);
+    input[type=range].ui-range::-webkit-slider-thumb{
+      -webkit-appearance:none;margin-top:-7px;width:18px;height:18px;border-radius:50%;
+      background:var(--paper);border:1.5px solid var(--fill,var(--ink));box-shadow:0 1px 3px rgba(0,0,0,.18);
     }
-    .led { flex: 1; }
-    .status {
-      margin-top: 20px;
-      padding: 12px;
-      background: #f0f4ff;
-      border-left: 4px solid #667eea;
-      border-radius: 4px;
-      font-size: 13px;
-      color: #555;
+    input[type=range].ui-range::-moz-range-thumb{
+      width:16px;height:16px;border-radius:50%;background:var(--paper);border:1.5px solid var(--fill,var(--ink));
     }
-    .status.success {
-      background: #f0fdf4;
-      border-left-color: #22c55e;
-      color: #166534;
+    input[type=range].ui-range.ui-y{--fill:var(--warn)}
+    input[type=range].ui-range.ui-r{--fill:var(--alert)}
+
+    .ui-btn{
+      border:1px solid var(--line);border-radius:8px;background:var(--paper);color:var(--ink);
+      padding:9px 14px;font-size:13.5px;font-weight:560;font-family:var(--sans);white-space:nowrap;cursor:pointer;
     }
-    .live-level {
-      background: #f8f9fa;
-      border-radius: 8px;
-      padding: 20px;
-      margin-bottom: 25px;
+    .ui-btn.ui-primary{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+    .ui-btn.ui-wide{width:100%;text-align:center}
+    .ui-btn.ui-sm{padding:6px 10px;font-size:12px}
+    .ui-btn:disabled{opacity:.55;cursor:default}
+
+    .ui-choice{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .ui-opt{border:1px solid var(--line);border-radius:10px;padding:11px 12px;display:flex;flex-direction:column;gap:5px;
+      background:var(--paper);cursor:pointer;text-align:left}
+    .ui-opt.on{border-color:var(--ink);box-shadow:inset 0 0 0 1px var(--ink)}
+    .ui-opt .ui-optt{display:flex;align-items:center;gap:7px;font-size:13.5px;font-weight:600}
+    .ui-radio{width:14px;height:14px;border-radius:50%;border:1.5px solid var(--ink-3);flex:none}
+    .ui-opt.on .ui-radio{border-color:var(--ink);box-shadow:inset 0 0 0 3px var(--paper),inset 0 0 0 9px var(--ink)}
+    .ui-opt small{color:var(--ink-3);font-size:11.5px;line-height:1.35}
+
+    .ui-swatchrow{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+    .ui-swatch{border:1px solid var(--line);border-radius:9px;padding:8px;display:flex;flex-direction:column;gap:7px;align-items:center}
+    .ui-swatch input[type=color]{
+      display:block;width:100%;height:26px;border-radius:5px;border:none;padding:0;cursor:pointer;background:none;
     }
-    .level-value {
-      display: flex;
-      justify-content: space-between;
-      align-items: baseline;
-      margin-bottom: 12px;
+    .ui-swatch code{font-family:var(--mono);font-size:10.5px;color:var(--ink-3)}
+    .ui-swatch em{font-style:normal;font-size:11px;color:var(--ink-2);font-weight:550}
+
+    .ui-strip{display:flex;gap:3px;padding:9px;border:1px solid var(--line);border-radius:9px;background:var(--paper-2)}
+    .ui-strip i{flex:1;height:26px;border-radius:3px;display:block}
+
+    .ui-chart{width:100%;height:auto;display:block}
+    .ui-xaxis{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--ink-3)}
+    .ui-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--ink-2)}
+    .ui-legend span{display:inline-flex;align-items:center;gap:6px}
+    .ui-legend i{width:9px;height:9px;border-radius:2px;display:block}
+    .ui-bars{display:flex;gap:2px;height:78px;align-items:flex-end}
+    .ui-bar{flex:1;height:100%;display:flex;flex-direction:column-reverse;border-radius:2px;overflow:hidden;background:var(--paper-2)}
+    .ui-bar i{background:var(--quiet);display:block}
+    .ui-bar b{background:var(--warn);display:block;margin:0}
+    .ui-bar s{background:var(--alert);display:block;text-decoration:none}
+    .ui-bar.ui-empty{background:repeating-linear-gradient(45deg,var(--paper-2) 0 3px,transparent 3px 6px)}
+
+    .ui-status{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink-2)}
+    .ui-status i{width:7px;height:7px;border-radius:50%;background:var(--quiet);flex:none}
+    .ui-status.ui-off i{background:var(--ink-3)}
+    .ui-note{
+      font-size:11.5px;color:var(--ink-2);background:rgba(216,154,24,.12);
+      border:1px solid rgba(216,154,24,.30);border-radius:8px;padding:9px 11px;line-height:1.4;
     }
-    .level-number {
-      font-size: 36px;
-      font-weight: 700;
-      color: #333;
+    .ui-saved{font-family:var(--mono);font-size:11.5px;color:var(--quiet);min-height:1.4em}
+    .ui-file{
+      display:flex;align-items:center;gap:9px;border:1px dashed var(--line);border-radius:8px;padding:9px 11px;
+      font-size:12.5px;color:var(--ink-2);cursor:pointer;
     }
-    .level-unit {
-      font-size: 14px;
-      color: #999;
+    .ui-file code{font-family:var(--mono);font-size:12px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .ui-file input{display:none}
+    .ui-track{height:6px;border-radius:3px;background:var(--paper-2);border:1px solid var(--line-soft);overflow:hidden}
+    .ui-fill{height:100%;background:var(--ink);border-radius:3px;width:0%;transition:width .2s}
+    .ui-foot{
+      padding:14px 16px 20px;border-top:1px solid var(--line);
+      font-family:var(--mono);font-size:10.5px;color:var(--ink-3);display:flex;flex-wrap:wrap;gap:4px 12px;
     }
-    .level-bar-container {
-      width: 100%;
-      height: 24px;
-      background: #e5e7eb;
-      border-radius: 4px;
-      overflow: hidden;
-      margin-top: 12px;
-    }
-    .level-bar {
-      height: 100%;
-      width: 0%;
-      background: linear-gradient(90deg, #22c55e 0%, #eab308 50%, #ef4444 100%);
-      transition: width 0.1s ease;
-    }
-    button {
-      width: 100%;
-      padding: 12px;
-      background: #667eea;
-      color: white;
-      border: none;
-      border-radius: 6px;
-      font-size: 16px;
-      font-weight: 600;
-      cursor: pointer;
-      margin-top: 20px;
-      transition: background 0.3s;
-    }
-    button:hover { background: #5568d3; }
-    button:active { transform: scale(0.98); }
-    .color-picker {
-      width: 60px;
-      height: 40px;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-    }
-    .color-group {
-      display: flex;
-      gap: 10px;
-      align-items: center;
-      margin-bottom: 10px;
-    }
-    .color-group label {
-      width: 80px;
-      margin: 0;
+
+    @media (min-width:860px){
+      .ui-pad{display:grid;grid-template-columns:minmax(0,380px) minmax(0,1fr);gap:20px;align-items:start}
     }
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>🎵 noiselight</h1>
-    
-    <div class="live-level">
-      <div class="level-value">
-        <div>
-          <div class="level-number" id="live-db">--</div>
-          <div class="level-unit">Current Level</div>
-        </div>
-      </div>
-      <div class="level-bar-container">
-        <div class="level-bar" id="live-bar"></div>
-      </div>
-    </div>
+<div class="ui-wrap">
 
-    <div class="section">
-      <div class="section-title">Verlauf (5 min)</div>
-      <canvas id="history-canvas" width="440" height="120"
-        style="width:100%; height:120px; background:#f8f9fa; border-radius:8px;"></canvas>
-    </div>
-
-    <div class="section">
-      <div class="section-title">Tagesstatistik <span id="hourly-since" style="text-transform:none; letter-spacing:normal; font-weight:400; color:#999;"></span></div>
-      <canvas id="hourly-canvas" width="480" height="140"
-        style="width:100%; height:140px; background:#f8f9fa; border-radius:8px;"></canvas>
-      <div id="hourly-note" style="display:none; font-size:12px; color:#999; margin-top:6px;"></div>
-      <button onclick="resetHourlyStats()" style="margin-top:8px;">Zurücksetzen</button>
-    </div>
-
-    <div class="section">
-      <div class="section-title">Display Mode</div>
-      <div class="radio-group">
-        <label><input type="radio" name="mode" value="0" onchange="updatePreview()"> Traffic Light</label>
-        <label><input type="radio" name="mode" value="1" onchange="updatePreview()"> VU Meter</label>
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="section-title">LED Settings</div>
-      
-      <div class="range-container">
-        <label>Brightness <span class="value-display" id="brightness-val">25</span></label>
-        <input type="range" id="brightness-slider" min="0" max="255" step="1" value="25" onchange="updatePreview()">
-      </div>
-      
-      <div style="margin-top: 20px;">
-        <div class="color-group">
-          <label>Green</label>
-          <input type="color" id="color-green" value="#00FF00" class="color-picker" onchange="updatePreview()">
-        </div>
-        <div class="color-group">
-          <label>Yellow</label>
-          <input type="color" id="color-yellow" value="#FFFF00" class="color-picker" onchange="updatePreview()">
-        </div>
-        <div class="color-group">
-          <label>Red</label>
-          <input type="color" id="color-red" value="#FF0000" class="color-picker" onchange="updatePreview()">
-        </div>
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="section-title">Color Switchover Points (dB)</div>
-      
-      <div class="range-container">
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-          <label style="margin-bottom: 0;">Floor Level <span class="value-display" id="floor-val">37 dB</span></label>
-          <button style="width: auto; padding: 6px 12px; margin-top: 0; font-size: 12px;" onclick="setFloorToCurrent()">Current</button>
-        </div>
-        <input type="range" id="floor-slider" min="20" max="60" step="1" value="37" onchange="updatePreview()">
-        <div id="suggested-floor-hint" style="display:none; font-size: 12px; color: #667eea; margin-top: 4px;"></div>
-      </div>
-
-      <div class="range-container">
-        <label>Green→Yellow Switchover <span class="value-display" id="green-val">50 dB</span></label>
-        <input type="range" id="green-slider" min="30" max="70" step="1" value="50" onchange="updatePreview()">
-      </div>
-      
-      <div class="range-container">
-        <label>Yellow→Red Switchover <span class="value-display" id="yellow-val">65 dB</span></label>
-        <input type="range" id="yellow-slider" min="40" max="85" step="1" value="65" onchange="updatePreview()">
-      </div>
-      
-      <div class="led-preview" id="preview"></div>
-    </div>
-
-    <div class="section">
-      <div class="section-title">Response Timing</div>
-      
-      <div class="range-container">
-        <label>Decay Time <span class="value-display" id="decay-val">1500 ms</span></label>
-        <input type="range" id="decay-slider" min="0" max="3000" step="100" value="1500" onchange="updatePreview()">
-      </div>
-      
-      <div class="range-container">
-        <label>Response Time <span class="value-display" id="response-val">100 ms</span></label>
-        <input type="range" id="response-slider" min="0" max="500" step="50" value="100" onchange="updatePreview()">
-      </div>
-    </div>
-
-    <div id="status" class="status" style="display:none;"></div>
-
-    <button onclick="saveConfig()">Save Configuration</button>
-
-    <div class="section" style="margin-top: 25px;">
-      <div class="section-title">WLAN</div>
-
-      <div id="wifi-state" style="font-size: 13px; color: #888; margin-bottom: 10px;">--</div>
-
-      <div class="range-container">
-        <label>SSID</label>
-        <input type="text" id="wifi-ssid" placeholder="Heimnetz-Name"
-          style="width:100%; padding:8px; border:1px solid #ddd; border-radius:4px;">
-      </div>
-
-      <div class="range-container">
-        <label>Passwort <span style="font-weight:400; color:#999;">(leer lassen, um bestehendes zu behalten)</span></label>
-        <input type="password" id="wifi-pass" placeholder="········"
-          style="width:100%; padding:8px; border:1px solid #ddd; border-radius:4px;">
-      </div>
-
-      <div class="range-container">
-        <label>Zeitzone (POSIX TZ) <span style="font-weight:400; color:#999;">- für Tagesstatistik-Stunden, berücksichtigt Sommer-/Winterzeit</span></label>
-        <input type="text" id="tz-string" placeholder="CET-1CEST,M3.5.0,M10.5.0/3"
-          style="width:100%; padding:8px; border:1px solid #ddd; border-radius:4px;">
-      </div>
-
-      <div id="wifi-status" class="status" style="display:none;"></div>
-
-      <button onclick="saveNetwork()">WLAN speichern &amp; verbinden</button>
-    </div>
-
-    <div class="section" style="margin-top: 25px;">
-      <div class="section-title">MQTT / Home Assistant</div>
-
-      <div class="range-container">
-        <label>Broker-Host <span style="font-weight:400; color:#999;">(leer lassen, um MQTT zu deaktivieren)</span></label>
-        <input type="text" id="mqtt-host" placeholder="z.B. 192.168.1.10 oder homeassistant.local"
-          style="width:100%; padding:8px; border:1px solid #ddd; border-radius:4px;">
-      </div>
-
-      <div class="range-container">
-        <label>Port</label>
-        <input type="number" id="mqtt-port" value="1883" min="1" max="65535"
-          style="width:100%; padding:8px; border:1px solid #ddd; border-radius:4px;">
-      </div>
-
-      <div class="range-container">
-        <label>Benutzer <span style="font-weight:400; color:#999;">(optional)</span></label>
-        <input type="text" id="mqtt-user"
-          style="width:100%; padding:8px; border:1px solid #ddd; border-radius:4px;">
-      </div>
-
-      <div class="range-container">
-        <label>Passwort <span style="font-weight:400; color:#999;">(leer lassen, um bestehendes zu behalten)</span></label>
-        <input type="password" id="mqtt-pass" placeholder="········"
-          style="width:100%; padding:8px; border:1px solid #ddd; border-radius:4px;">
-      </div>
-
-      <div id="mqtt-status" class="status" style="display:none;"></div>
-
-      <button onclick="saveMqtt()">MQTT speichern</button>
-    </div>
-
-    <div class="section" style="margin-top: 25px;">
-      <div class="section-title">Firmware-Update</div>
-      <div style="font-size: 12px; color: #999; margin-bottom: 10px;">
-        Neue .bin-Datei hochladen, um die Firmware zu aktualisieren. Das Gerät startet danach automatisch neu.
-      </div>
-
-      <div class="range-container">
-        <label>OTA-Passwort</label>
-        <input type="password" id="update-pass" placeholder="········"
-          style="width:100%; padding:8px; border:1px solid #ddd; border-radius:4px;">
-      </div>
-
-      <div class="range-container">
-        <label>Firmware-Datei</label>
-        <input type="file" id="update-file" accept=".bin"
-          style="width:100%; padding:8px; border:1px solid #ddd; border-radius:4px;">
-      </div>
-
-      <div class="level-bar-container" id="update-progress-container" style="display:none;">
-        <div class="level-bar" id="update-progress-bar" style="background:#667eea;"></div>
-      </div>
-
-      <div id="update-status" class="status" style="display:none;"></div>
-
-      <button onclick="uploadFirmware()">Firmware hochladen</button>
-    </div>
-
-    <div class="section" style="margin-top: 25px;">
-      <div class="section-title">Konfiguration</div>
-      <div style="font-size: 12px; color: #999; margin-bottom: 10px;">
-        Export enthält WLAN-/MQTT-Passwörter im Klartext - Datei entsprechend behandeln.
-      </div>
-      <div style="display:flex; gap:10px;">
-        <button style="margin-top:0;" onclick="exportConfig()">Export</button>
-        <button style="margin-top:0;" onclick="document.getElementById('import-file').click()">Import</button>
-      </div>
-      <input type="file" id="import-file" accept="application/json" style="display:none;" onchange="importConfig(event)">
-      <div id="config-io-status" class="status" style="display:none;"></div>
-    </div>
-
-    <div style="font-size:11px; color:#bbb; text-align:center; margin-top:20px;">
-      <span id="fw-version"></span>
+  <div class="ui-top">
+    <div class="ui-mark"><i class="ui-lamp" id="lamp"></i><b>noiselight</b></div>
+    <div class="ui-spacer"></div>
+    <div class="ui-lang" id="lang-toggle">
+      <span data-lang="de" id="lang-de">DE</span><span data-lang="en" id="lang-en">EN</span>
     </div>
   </div>
 
-  <script>
-    async function updateLiveLevel() {
-      try {
-        const res = await fetch('/api/status');
-        const data = await res.json();
-        document.getElementById('live-db').textContent = data.db.toFixed(1);
-        document.getElementById('fw-version').textContent = 'Firmware ' + data.firmware;
+  <div class="ui-pad">
 
-        const minDb = 37;
-        const maxDb = 80;
-        const normalized = Math.max(0, Math.min(1, (data.db - minDb) / (maxDb - minDb)));
-        document.getElementById('live-bar').style.width = (normalized * 100) + '%';
+    <!-- LEFT: status rail -->
+    <div class="ui-col">
 
-        const hint = document.getElementById('suggested-floor-hint');
-        if (data.suggested_floor !== undefined) {
-          hint.innerHTML = 'Vorschlag beim letzten Boot: ' + data.suggested_floor.toFixed(1) +
-            ' dB - <a href="#" onclick="applySuggestedFloor(' + data.suggested_floor + '); return false;">übernehmen?</a>';
-          hint.style.display = 'block';
-        }
-      } catch (e) {
-        console.error('Status update failed:', e);
+      <div class="ui-live">
+        <div class="ui-live-row">
+          <div class="ui-db" id="live-db">--</div>
+          <div class="ui-db-u">dB</div>
+          <div class="ui-pill" id="live-pill"><i></i><span id="live-pill-text">--</span></div>
+        </div>
+        <div>
+          <div class="ui-meter"><div class="ui-meter-mask" id="meter-mask"></div><div class="ui-needle" id="meter-needle"></div></div>
+          <div class="ui-scale">
+            <span id="scale-0">--</span><span id="scale-1">--</span><span id="scale-2">--</span><span id="scale-3">--</span>
+          </div>
+        </div>
+        <div class="ui-facts">
+          <div class="ui-fact"><em data-t="fact.peak">Spitze 5 min</em><b id="fact-peak">--</b></div>
+          <div class="ui-fact"><em data-t="fact.thresh">Schwellen</em><b id="fact-thresh">-- / --</b></div>
+          <div class="ui-fact"><em data-t="fact.mode">Modus</em><b id="fact-mode">--</b></div>
+        </div>
+      </div>
+
+      <div class="ui-card">
+        <div class="ui-sum"><b data-t="hist.title">Verlauf</b><span class="ui-val" data-t="hist.sub">letzte 5 min</span></div>
+        <div class="ui-body">
+          <svg class="ui-chart" id="history-svg" viewBox="0 0 320 108" role="img" aria-label="History">
+            <g id="history-bands"></g>
+            <g id="history-lines"></g>
+            <g id="history-labels" font-family="ui-monospace,Menlo,monospace" font-size="8.5" fill="var(--ink-3)"></g>
+            <polyline id="history-poly" fill="none" stroke="var(--ink)" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" points=""></polyline>
+            <circle id="history-dot" cx="0" cy="0" r="3" fill="var(--quiet)"></circle>
+          </svg>
+          <div class="ui-xaxis"><span>&minus;5 min</span><span>&minus;3</span><span>&minus;1</span><span data-t="hist.now">jetzt</span></div>
+        </div>
+      </div>
+
+      <div class="ui-card">
+        <div class="ui-sum"><b data-t="today.title">Heute</b><span class="ui-val" id="today-sub">seit 00:00</span></div>
+        <div class="ui-body">
+          <div class="ui-bars" id="hourly-bars"></div>
+          <div class="ui-xaxis"><span>00</span><span>06</span><span>12</span><span>18</span><span>23</span></div>
+          <div class="ui-legend">
+            <span><i style="background:var(--quiet)"></i><span id="leg-normal">--</span></span>
+            <span><i style="background:var(--warn)"></i><span id="leg-warning">--</span></span>
+            <span><i style="background:var(--alert)"></i><span id="leg-alert">--</span></span>
+          </div>
+          <div class="ui-note" id="hourly-note" style="display:none"></div>
+          <div class="ui-row-btn">
+            <button class="ui-btn ui-sm" type="button" id="btn-hourly-reset" data-t="today.reset">Tag zur&uuml;cksetzen</button>
+            <span class="ui-hint" data-t="today.since">Z&auml;hlt seit 00:00 Uhr heute.</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- RIGHT: settings drawers -->
+    <div class="ui-col">
+
+      <div class="ui-grouptitle" data-t="group.licht">Licht</div>
+      <div class="ui-card">
+
+        <details class="ui-d" id="d-mode">
+          <summary class="ui-sum"><b data-t="mode.summary">Anzeigemodus</b><span class="ui-val" id="mode-val">--</span><i class="ui-chev"></i></summary>
+          <div class="ui-body">
+            <div class="ui-choice">
+              <button type="button" class="ui-opt" id="opt-mode-0" data-mode="0">
+                <div class="ui-optt"><i class="ui-radio"></i><span data-t="mode.traffic">Ampel</span></div>
+                <small data-t="mode.traffic.desc">Der ganze Streifen leuchtet gr&uuml;n, gelb oder rot.</small>
+              </button>
+              <button type="button" class="ui-opt" id="opt-mode-1" data-mode="1">
+                <div class="ui-optt"><i class="ui-radio"></i><span data-t="mode.vu">VU-Meter</span></div>
+                <small data-t="mode.vu.desc">Der Ausschlag w&auml;chst mit der Lautst&auml;rke.</small>
+              </button>
+            </div>
+          </div>
+        </details>
+
+        <details class="ui-d" id="d-bright">
+          <summary class="ui-sum"><b data-t="bright.summary">Helligkeit &amp; Farben</b><span class="ui-val" id="bright-val">--</span><i class="ui-chev"></i></summary>
+          <div class="ui-body">
+            <div class="ui-field">
+              <div class="ui-lab"><span data-t="bright.label">Helligkeit</span><span class="ui-num" id="bright-num">-- / 255</span></div>
+              <input type="range" class="ui-range" id="brightness-slider" min="0" max="255" step="1" value="180">
+            </div>
+            <div class="ui-swatchrow">
+              <div class="ui-swatch"><input type="color" id="color-normal" value="#22C55E"><em data-t="sw.normal">Ruhig</em><code id="color-normal-hex">#22C55E</code></div>
+              <div class="ui-swatch"><input type="color" id="color-warning" value="#EAB308"><em data-t="sw.warning">Laut</em><code id="color-warning-hex">#EAB308</code></div>
+              <div class="ui-swatch"><input type="color" id="color-alert" value="#EF4444"><em data-t="sw.alert">Zu laut</em><code id="color-alert-hex">#EF4444</code></div>
+            </div>
+          </div>
+        </details>
+
+        <details class="ui-d" id="d-thresh">
+          <summary class="ui-sum"><b data-t="thresh.summary">Schaltschwellen</b><span class="ui-val" id="thresh-val">-- / -- dB</span><i class="ui-chev"></i></summary>
+          <div class="ui-body">
+            <div class="ui-strip" id="led-strip"></div>
+            <div class="ui-hint" data-t="thresh.previewhint">Vorschau des LED-Streifens mit den aktuellen Werten.</div>
+
+            <div class="ui-field">
+              <div class="ui-lab"><span data-t="floor.label">Grundpegel</span><span class="ui-num" id="floor-num">-- dB</span></div>
+              <input type="range" class="ui-range" id="floor-slider" min="20" max="60" step="1" value="37">
+              <div class="ui-row-btn">
+                <button class="ui-btn ui-sm" type="button" id="btn-floor-current" data-t="floor.apply">Aktuellen Pegel &uuml;bernehmen</button>
+                <span class="ui-hint" id="floor-current-hint"></span>
+              </div>
+              <div class="ui-hint" id="suggested-floor-hint" style="display:none"></div>
+            </div>
+
+            <div class="ui-field">
+              <div class="ui-lab"><span data-t="green.label">Gr&uuml;n wird gelb ab</span><span class="ui-num" id="green-num">-- dB</span></div>
+              <input type="range" class="ui-range ui-y" id="green-slider" min="30" max="70" step="1" value="50">
+            </div>
+
+            <div class="ui-field">
+              <div class="ui-lab"><span data-t="yellow.label">Gelb wird rot ab</span><span class="ui-num" id="yellow-num">-- dB</span></div>
+              <input type="range" class="ui-range ui-r" id="yellow-slider" min="40" max="85" step="1" value="65">
+            </div>
+          </div>
+        </details>
+
+        <details class="ui-d" id="d-timing">
+          <summary class="ui-sum"><b data-t="timing.summary">Reaktion</b><span class="ui-val" id="timing-val">-- / -- ms</span><i class="ui-chev"></i></summary>
+          <div class="ui-body">
+            <div class="ui-field">
+              <div class="ui-lab"><span data-t="decay.label">Nachleuchten</span><span class="ui-num" id="decay-num">-- ms</span></div>
+              <input type="range" class="ui-range" id="decay-slider" min="0" max="3000" step="100" value="1500">
+              <div class="ui-hint" data-t="decay.hint">Wie lange die Farbe nach einem Ger&auml;usch stehen bleibt.</div>
+            </div>
+            <div class="ui-field">
+              <div class="ui-lab"><span data-t="response.label">Ansprechzeit</span><span class="ui-num" id="response-num">-- ms</span></div>
+              <input type="range" class="ui-range" id="response-slider" min="0" max="500" step="50" value="100">
+              <div class="ui-hint" data-t="response.hint">Kleiner Wert = zappeliger, gr&ouml;&szlig;erer Wert = ruhiger.</div>
+            </div>
+          </div>
+        </details>
+      </div>
+
+      <div class="ui-row-btn">
+        <button class="ui-btn ui-primary ui-wide" type="button" id="btn-save-licht" data-t="save.licht">Lichteinstellungen speichern</button>
+      </div>
+      <div class="ui-saved" id="save-licht-status"></div>
+
+      <div class="ui-grouptitle" data-t="group.netzwerk">Netzwerk</div>
+      <div class="ui-card">
+        <details class="ui-d" id="d-wifi">
+          <summary class="ui-sum"><b data-t="wifi.summary">WLAN</b><span class="ui-val" id="wifi-val">--</span><i class="ui-chev"></i></summary>
+          <div class="ui-body">
+            <div class="ui-status" id="wifi-status-line"><i></i><span id="wifi-status-text">--</span></div>
+            <div class="ui-field"><div class="ui-lab" data-t="wifi.ssid">Netzwerkname (SSID)</div>
+              <input class="ui-in" type="text" id="wifi-ssid" placeholder="Heimnetz-Name"></div>
+            <div class="ui-field"><div class="ui-lab" data-t="wifi.pass">Passwort</div>
+              <input class="ui-in" type="password" id="wifi-pass" data-t-ph="wifi.pass.hint" placeholder="Leer lassen, um das gespeicherte zu behalten"></div>
+            <div class="ui-field"><div class="ui-lab" data-t="wifi.tz">Zeitzone</div>
+              <input class="ui-in ui-mono" type="text" id="tz-string" placeholder="CET-1CEST,M3.5.0,M10.5.0/3">
+              <div class="ui-hint" data-t="wifi.tz.hint">POSIX-Zeitzone. F&uuml;r Deutschland den Vorgabewert lassen.</div>
+            </div>
+            <button class="ui-btn ui-wide" type="button" id="btn-save-wifi" data-t="wifi.save">Speichern &amp; verbinden</button>
+            <div class="ui-saved" id="wifi-save-status"></div>
+          </div>
+        </details>
+        <details class="ui-d" id="d-mqtt">
+          <summary class="ui-sum"><b data-t="mqtt.summary">Home Assistant (MQTT)</b><span class="ui-val" id="mqtt-val">--</span><i class="ui-chev"></i></summary>
+          <div class="ui-body">
+            <div class="ui-row2">
+              <div class="ui-field"><div class="ui-lab" data-t="mqtt.host">Broker</div>
+                <input class="ui-in ui-mono" type="text" id="mqtt-host" placeholder="192.168.1.20"></div>
+              <div class="ui-field"><div class="ui-lab" data-t="mqtt.port">Port</div>
+                <input class="ui-in ui-mono" type="number" id="mqtt-port" min="1" max="65535" value="1883"></div>
+            </div>
+            <div class="ui-row2">
+              <div class="ui-field"><div class="ui-lab" data-t="mqtt.user">Benutzer</div>
+                <input class="ui-in" type="text" id="mqtt-user"></div>
+              <div class="ui-field"><div class="ui-lab" data-t="mqtt.pass">Passwort</div>
+                <input class="ui-in" type="password" id="mqtt-pass" data-t-ph="mqtt.pass.hint" placeholder="unver&auml;ndert"></div>
+            </div>
+            <button class="ui-btn ui-wide" type="button" id="btn-save-mqtt" data-t="mqtt.save">MQTT speichern</button>
+            <div class="ui-saved" id="mqtt-save-status"></div>
+          </div>
+        </details>
+      </div>
+
+      <div class="ui-grouptitle" data-t="group.geraet">Ger&auml;t</div>
+      <div class="ui-card">
+        <details class="ui-d" id="d-fw">
+          <summary class="ui-sum"><b data-t="fw.summary">Firmware aktualisieren</b><span class="ui-val" id="fw-val">--</span><i class="ui-chev"></i></summary>
+          <div class="ui-body">
+            <div class="ui-field"><div class="ui-lab" data-t="fw.pass">OTA-Passwort</div>
+              <input class="ui-in" type="password" id="update-pass"></div>
+            <label class="ui-file" for="update-file">
+              <span data-t="fw.file.label">Datei</span><code id="update-filename" data-t="fw.file.placeholder">Keine Datei ausgew&auml;hlt</code>
+              <input type="file" id="update-file" accept=".bin">
+            </label>
+            <div>
+              <div class="ui-track"><div class="ui-fill" id="update-progress-bar"></div></div>
+              <div class="ui-hint" id="update-status" data-t="fw.ready" style="margin-top:6px">Bereit. Das Ger&auml;t startet nach dem Update neu.</div>
+            </div>
+            <button class="ui-btn ui-wide" type="button" id="btn-upload-fw" data-t="fw.upload">Hochladen &amp; installieren</button>
+          </div>
+        </details>
+        <details class="ui-d" id="d-backup">
+          <summary class="ui-sum"><b data-t="backup.summary">Sicherung</b><span class="ui-val" data-t="backup.subtitle">Export / Import</span><i class="ui-chev"></i></summary>
+          <div class="ui-body">
+            <div class="ui-row-btn">
+              <button class="ui-btn" type="button" id="btn-export" data-t="backup.export">Exportieren</button>
+              <button class="ui-btn" type="button" id="btn-import" data-t="backup.import">Importieren</button>
+            </div>
+            <input type="file" id="import-file" accept="application/json" style="display:none">
+            <div class="ui-note" id="backup-warn"><b data-t="backup.warn.b">Achtung:</b> <span data-t="backup.warn">Die Exportdatei enth&auml;lt WLAN- und MQTT-Passw&ouml;rter im Klartext. Nicht weitergeben.</span></div>
+            <div class="ui-saved" id="backup-status"></div>
+          </div>
+        </details>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="ui-foot">
+    <span id="fw-version">Firmware --</span>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  var STR = {
+    de: {
+      'fact.peak':'Spitze 5 min','fact.thresh':'Schwellen','fact.mode':'Modus',
+      'mode.traffic':'Ampel','mode.vu':'VU-Meter',
+      'pill.quiet':'Ruhig','pill.warn':'Laut','pill.alert':'Zu laut',
+      'hist.title':'Verlauf','hist.sub':'letzte 5 min','hist.now':'jetzt',
+      'today.title':'Heute','today.sub':'seit 00:00','today.reset':'Tag zurücksetzen',
+      'today.since':'Zählt seit 00:00 Uhr heute.',
+      'today.since.prefix':'seit ',
+      'today.notsynced':'Uhrzeit noch nicht synchronisiert – Statistik startet, sobald das Gerät die Zeit per NTP erhalten hat.',
+      'today.resetconfirm':'Statistik wirklich zurücksetzen?',
+      'leg.normal':'Ruhig','leg.warning':'Laut','leg.alert':'Zu laut',
+      'group.licht':'Licht','group.netzwerk':'Netzwerk','group.geraet':'Gerät',
+      'mode.summary':'Anzeigemodus',
+      'mode.traffic.desc':'Der ganze Streifen leuchtet grün, gelb oder rot.',
+      'mode.vu.desc':'Der Ausschlag wächst mit der Lautstärke.',
+      'bright.summary':'Helligkeit & Farben',
+      'bright.label':'Helligkeit',
+      'sw.normal':'Ruhig','sw.warning':'Laut','sw.alert':'Zu laut',
+      'thresh.summary':'Schaltschwellen',
+      'thresh.previewhint':'Vorschau des LED-Streifens mit den aktuellen Werten.',
+      'floor.label':'Grundpegel',
+      'floor.apply':'Aktuellen Pegel übernehmen',
+      'green.label':'Grün wird gelb ab',
+      'yellow.label':'Gelb wird rot ab',
+      'timing.summary':'Reaktion',
+      'decay.label':'Nachleuchten','decay.hint':'Wie lange die Farbe nach einem Geräusch stehen bleibt.',
+      'response.label':'Ansprechzeit','response.hint':'Kleiner Wert = zappeliger, größerer Wert = ruhiger.',
+      'save.licht':'Lichteinstellungen speichern',
+      'save.ok':'Gespeichert um ',
+      'save.fail':'Speichern fehlgeschlagen',
+      'wifi.summary':'WLAN',
+      'wifi.connected':'Verbunden',
+      'wifi.notconfigured':'Kein WLAN konfiguriert – AP-Fallback aktiv',
+      'wifi.notconnected':'Nicht verbunden – AP-Fallback aktiv',
+      'wifi.ssid':'Netzwerkname (SSID)',
+      'wifi.pass':'Passwort','wifi.pass.hint':'Leer lassen, um das gespeicherte zu behalten',
+      'wifi.tz':'Zeitzone','wifi.tz.hint':'POSIX-Zeitzone. Für Deutschland den Vorgabewert lassen.',
+      'wifi.save':'Speichern & verbinden',
+      'wifi.saved':'Gespeichert – Gerät verbindet neu (kann bis zu 15s dauern)…',
+      'wifi.notset':'kein WLAN',
+      'mqtt.summary':'Home Assistant (MQTT)',
+      'mqtt.host':'Broker','mqtt.port':'Port','mqtt.user':'Benutzer','mqtt.pass':'Passwort','mqtt.pass.hint':'unverändert',
+      'mqtt.save':'MQTT speichern','mqtt.saved':'MQTT-Einstellungen gespeichert',
+      'mqtt.disabled':'nicht konfiguriert',
+      'mqtt.configured':'konfiguriert',
+      'fw.summary':'Firmware aktualisieren',
+      'fw.pass':'OTA-Passwort',
+      'fw.file.label':'Datei',
+      'fw.file.placeholder':'Keine Datei ausgewählt',
+      'fw.upload':'Hochladen & installieren',
+      'fw.ready':'Bereit. Das Gerät startet nach dem Update neu.',
+      'fw.uploading':'Wird hochgeladen…',
+      'fw.ok':'Erfolgreich – Gerät startet neu…',
+      'fw.fail':'Upload fehlgeschlagen',
+      'fw.nofile':'Bitte zuerst eine .bin-Datei auswählen',
+      'backup.summary':'Sicherung',
+      'backup.subtitle':'Export / Import',
+      'backup.export':'Exportieren','backup.import':'Importieren',
+      'backup.warn.b':'Achtung:',
+      'backup.warn':'Die Exportdatei enthält WLAN- und MQTT-Passwörter im Klartext. Nicht weitergeben.',
+      'backup.importok':'Importiert – Seite lädt neu…',
+      'backup.importfail':'Import fehlgeschlagen (ungültige Datei?)',
+      'foot.firmware':'Firmware ',
+      'suggested.prefix':'Vorschlag beim letzten Boot: ',
+      'suggested.apply':'übernehmen?'
+    },
+    en: {
+      'fact.peak':'Peak 5 min','fact.thresh':'Thresholds','fact.mode':'Mode',
+      'mode.traffic':'Traffic light','mode.vu':'VU meter',
+      'pill.quiet':'Quiet','pill.warn':'Loud','pill.alert':'Too loud',
+      'hist.title':'History','hist.sub':'last 5 min','hist.now':'now',
+      'today.title':'Today','today.sub':'since 00:00','today.reset':'Reset today',
+      'today.since':'Counting since 00:00 today.',
+      'today.since.prefix':'since ',
+      'today.notsynced':'Clock not yet synchronised – stats start once the device gets time via NTP.',
+      'today.resetconfirm':'Really reset today’s stats?',
+      'leg.normal':'Quiet','leg.warning':'Loud','leg.alert':'Too loud',
+      'group.licht':'Light','group.netzwerk':'Network','group.geraet':'Device',
+      'mode.summary':'Display mode',
+      'mode.traffic.desc':'The whole strip glows green, yellow or red.',
+      'mode.vu.desc':'The lit portion grows with volume.',
+      'bright.summary':'Brightness & colours',
+      'bright.label':'Brightness',
+      'sw.normal':'Quiet','sw.warning':'Loud','sw.alert':'Too loud',
+      'thresh.summary':'Colour thresholds',
+      'thresh.previewhint':'Preview of the LED strip with the current values.',
+      'floor.label':'Floor level',
+      'floor.apply':'Use current level',
+      'green.label':'Green turns yellow at',
+      'yellow.label':'Yellow turns red at',
+      'timing.summary':'Response',
+      'decay.label':'Decay','decay.hint':'How long the colour stays after a sound.',
+      'response.label':'Response time','response.hint':'Lower = twitchier, higher = calmer.',
+      'save.licht':'Save light settings',
+      'save.ok':'Saved at ',
+      'save.fail':'Save failed',
+      'wifi.summary':'WiFi',
+      'wifi.connected':'Connected',
+      'wifi.notconfigured':'No WiFi configured – AP fallback active',
+      'wifi.notconnected':'Not connected – AP fallback active',
+      'wifi.ssid':'Network name (SSID)',
+      'wifi.pass':'Password','wifi.pass.hint':'Leave empty to keep the stored one',
+      'wifi.tz':'Timezone','wifi.tz.hint':'POSIX timezone string. Leave the default for Germany.',
+      'wifi.save':'Save & connect',
+      'wifi.saved':'Saved – device is reconnecting (can take up to 15s)…',
+      'wifi.notset':'no WiFi',
+      'mqtt.summary':'Home Assistant (MQTT)',
+      'mqtt.host':'Broker','mqtt.port':'Port','mqtt.user':'User','mqtt.pass':'Password','mqtt.pass.hint':'unchanged',
+      'mqtt.save':'Save MQTT','mqtt.saved':'MQTT settings saved',
+      'mqtt.disabled':'not configured',
+      'mqtt.configured':'configured',
+      'fw.summary':'Firmware update',
+      'fw.pass':'OTA password',
+      'fw.file.label':'File',
+      'fw.file.placeholder':'No file selected',
+      'fw.upload':'Upload & install',
+      'fw.ready':'Ready. The device restarts after the update.',
+      'fw.uploading':'Uploading…',
+      'fw.ok':'Success – device is restarting…',
+      'fw.fail':'Upload failed',
+      'fw.nofile':'Please choose a .bin file first',
+      'backup.summary':'Backup',
+      'backup.subtitle':'Export / Import',
+      'backup.export':'Export','backup.import':'Import',
+      'backup.warn.b':'Warning:',
+      'backup.warn':'The export file contains WiFi and MQTT passwords in plain text. Handle it accordingly.',
+      'backup.importok':'Imported – page is reloading…',
+      'backup.importfail':'Import failed (invalid file?)',
+      'foot.firmware':'Firmware ',
+      'suggested.prefix':'Suggested at last boot: ',
+      'suggested.apply':'apply?'
+    }
+  };
+
+  var lang = (function(){
+    try {
+      var saved = localStorage.getItem('noiselight_lang');
+      if (saved === 'de' || saved === 'en') return saved;
+    } catch (e) {}
+    return (navigator.language || '').toLowerCase().indexOf('de') === 0 ? 'de' : 'en';
+  })();
+
+  function t(key) {
+    return (STR[lang] && STR[lang][key]) || key;
+  }
+
+  function el(id) { return document.getElementById(id); }
+
+  // ---- cached last-fetched data, re-rendered on language switch ----
+  var lastStatus = null, lastConfig = null, lastNetwork = null, lastHourly = null, lastHistory = null;
+
+  function classify(db, cfg) {
+    if (db >= cfg.db_warning_switchover) return 2;
+    if (db >= cfg.db_normal_switchover) return 1;
+    return 0;
+  }
+
+  function fmtDb(v) { return (Math.round(v * 10) / 10).toFixed(1); }
+
+  function applyLang() {
+    document.documentElement.lang = lang;
+    document.querySelectorAll('[data-t]').forEach(function(node) {
+      node.textContent = t(node.getAttribute('data-t'));
+    });
+    document.querySelectorAll('[data-t-ph]').forEach(function(node) {
+      node.placeholder = t(node.getAttribute('data-t-ph'));
+    });
+    el('lang-de').classList.toggle('on', lang === 'de');
+    el('lang-en').classList.toggle('on', lang === 'en');
+    renderAll();
+  }
+
+  function setLang(l) {
+    lang = l;
+    try { localStorage.setItem('noiselight_lang', lang); } catch (e) {}
+    applyLang();
+  }
+
+  el('lang-toggle').addEventListener('click', function(e) {
+    var t = e.target.closest('[data-lang]');
+    if (t) setLang(t.getAttribute('data-lang'));
+  });
+
+  // ---- live status / meter ----
+  function renderLive() {
+    if (!lastStatus || !lastConfig) return;
+    var db = lastStatus.db;
+    var cfg = lastConfig;
+    el('live-db').textContent = fmtDb(db);
+
+    var level = classify(db, cfg);
+    var pillCls = ['g', 'y', 'r'][level];
+    var pillKey = ['pill.quiet', 'pill.warn', 'pill.alert'][level];
+    var pill = el('live-pill');
+    pill.className = 'ui-pill ' + pillCls;
+    el('live-pill-text').textContent = t(pillKey);
+
+    var minDb = cfg.db_floor;
+    var maxDb = Math.max(cfg.db_warning_switchover + 20, cfg.db_normal_switchover + 5, minDb + 10);
+    var pct = Math.max(0, Math.min(1, (db - minDb) / (maxDb - minDb))) * 100;
+
+    var pctGreen = Math.max(0, Math.min(100, (cfg.db_normal_switchover - minDb) / (maxDb - minDb) * 100));
+    var pctYellow = Math.max(0, Math.min(100, (cfg.db_warning_switchover - minDb) / (maxDb - minDb) * 100));
+    el('meter-needle').style.left = pct + '%';
+    var meter = el('meter-mask').parentElement;
+    meter.style.background = 'linear-gradient(90deg,' +
+      'var(--quiet) 0%, var(--quiet) ' + pctGreen + '%,' +
+      'var(--warn) ' + pctGreen + '%, var(--warn) ' + pctYellow + '%,' +
+      'var(--alert) ' + pctYellow + '%, var(--alert) 100%)';
+    el('meter-mask').style.clipPath = 'inset(0 0 0 ' + pct + '%)';
+
+    el('scale-0').textContent = Math.round(minDb);
+    el('scale-1').textContent = Math.round(cfg.db_normal_switchover);
+    el('scale-2').textContent = Math.round(cfg.db_warning_switchover);
+    el('scale-3').textContent = Math.round(maxDb);
+
+    el('fact-thresh').textContent = Math.round(cfg.db_normal_switchover) + ' / ' + Math.round(cfg.db_warning_switchover);
+    el('fact-mode').textContent = t(cfg.display_mode === 0 ? 'mode.traffic' : 'mode.vu');
+
+    if (lastHistory && lastHistory.length) {
+      var peak = Math.max.apply(null, lastHistory);
+      el('fact-peak').textContent = fmtDb(peak) + ' dB';
+    }
+
+    el('fw-version').textContent = t('foot.firmware') + (lastStatus.firmware || '--');
+
+    var hint = el('suggested-floor-hint');
+    if (lastStatus.suggested_floor !== undefined) {
+      hint.innerHTML = t('suggested.prefix') + fmtDb(lastStatus.suggested_floor) + ' dB – ' +
+        '<a href="#" id="apply-suggested-floor">' + t('suggested.apply') + '</a>';
+      hint.style.display = 'block';
+      var link = el('apply-suggested-floor');
+      if (link) link.addEventListener('click', function(e) {
+        e.preventDefault();
+        el('floor-slider').value = Math.round(lastStatus.suggested_floor);
+        onConfigInput();
+      });
+    }
+
+    el('floor-current-hint').textContent = fmtDb(db) + ' dB';
+  }
+
+  // ---- history SVG ----
+  function renderHistory() {
+    if (!lastHistory || lastHistory.length < 2) return;
+    var data = lastHistory;
+    var w = 320, h = 108, padL = 30, padT = 8, padB = 14;
+    var plotH = h - padT - padB;
+    var minDb = Math.min.apply(null, data) - 2;
+    var maxDb = Math.max.apply(null, data) + 2;
+    var range = Math.max(1, maxDb - minDb);
+
+    var pts = data.map(function(db, i) {
+      var x = padL + (i / (data.length - 1)) * (w - padL);
+      var y = padT + (1 - (db - minDb) / range) * plotH;
+      return x.toFixed(1) + ',' + y.toFixed(1);
+    });
+    el('history-poly').setAttribute('points', pts.join(' '));
+    var last = pts[pts.length - 1].split(',');
+    el('history-dot').setAttribute('cx', last[0]);
+    el('history-dot').setAttribute('cy', last[1]);
+
+    var labels = el('history-labels');
+    labels.innerHTML = '';
+    [minDb, minDb + range * 0.34, minDb + range * 0.67, maxDb].forEach(function(v, i) {
+      var y = padT + (1 - (v - minDb) / range) * plotH;
+      var text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      text.setAttribute('x', 0);
+      text.setAttribute('y', (y + 3).toFixed(1));
+      text.textContent = Math.round(v);
+      labels.appendChild(text);
+    });
+  }
+
+  // ---- hourly stacked bars ----
+  function renderHourly() {
+    if (!lastHourly) return;
+    var data = lastHourly;
+    var note = el('hourly-note');
+    if (!data.time_synced) {
+      note.textContent = t('today.notsynced');
+      note.style.display = 'block';
+    } else {
+      note.style.display = 'none';
+    }
+
+    var sub = el('today-sub');
+    if (data.reset_at) {
+      sub.textContent = t('today.since.prefix') + new Date(data.reset_at * 1000).toLocaleTimeString();
+    } else {
+      sub.textContent = t('today.sub');
+    }
+
+    if (!Array.isArray(data.hours) || data.hours.length !== 24) return;
+
+    var msPerHour = 3600000;
+    var totals = [0, 0, 0];
+    var bars = el('hourly-bars');
+    bars.innerHTML = '';
+    data.hours.forEach(function(bucket) {
+      var normalMs = bucket[0], warningMs = bucket[1], alertMs = bucket[2];
+      totals[0] += normalMs; totals[1] += warningMs; totals[2] += alertMs;
+      var total = normalMs + warningMs + alertMs;
+      var bar = document.createElement('div');
+      if (total <= 0) {
+        bar.className = 'ui-bar ui-empty';
+      } else {
+        bar.className = 'ui-bar';
+        var i = document.createElement('i');
+        i.style.height = (Math.min(normalMs, msPerHour) / msPerHour * 100) + '%';
+        var b = document.createElement('b');
+        b.style.height = (Math.min(warningMs, msPerHour) / msPerHour * 100) + '%';
+        var s = document.createElement('s');
+        s.style.height = (Math.min(alertMs, msPerHour) / msPerHour * 100) + '%';
+        bar.appendChild(i); bar.appendChild(b); bar.appendChild(s);
       }
+      bars.appendChild(bar);
+    });
+
+    var grand = totals[0] + totals[1] + totals[2];
+    function pct(v) { return grand > 0 ? Math.round(v / grand * 100) : 0; }
+    el('leg-normal').textContent = t('leg.normal') + ' ' + pct(totals[0]) + ' %';
+    el('leg-warning').textContent = t('leg.warning') + ' ' + pct(totals[1]) + ' %';
+    el('leg-alert').textContent = t('leg.alert') + ' ' + pct(totals[2]) + ' %';
+  }
+
+  // ---- Licht config drawers ----
+  function ledColorAt(fracDb, cfg) {
+    if (fracDb < cfg.db_normal_switchover) return el('color-normal').value;
+    if (fracDb < cfg.db_warning_switchover) return el('color-warning').value;
+    return el('color-alert').value;
+  }
+
+  function renderLichtSummaries() {
+    var mode = document.querySelector('#opt-mode-0.on') ? 0 : (document.querySelector('#opt-mode-1.on') ? 1 : 0);
+    el('mode-val').textContent = t(mode === 0 ? 'mode.traffic' : 'mode.vu');
+
+    var brightness = parseInt(el('brightness-slider').value, 10);
+    el('bright-val').textContent = Math.round(brightness / 255 * 100) + ' %';
+    el('bright-num').textContent = brightness + ' / 255';
+
+    var floor = parseInt(el('floor-slider').value, 10);
+    var green = parseInt(el('green-slider').value, 10);
+    var yellow = parseInt(el('yellow-slider').value, 10);
+    el('floor-num').textContent = floor + ' dB';
+    el('green-num').textContent = green + ' dB';
+    el('yellow-num').textContent = yellow + ' dB';
+    el('thresh-val').textContent = green + ' / ' + yellow + ' dB';
+
+    var decay = parseInt(el('decay-slider').value, 10);
+    var response = parseInt(el('response-slider').value, 10);
+    el('decay-num').textContent = decay + ' ms';
+    el('response-num').textContent = response + ' ms';
+    el('timing-val').textContent = decay + ' / ' + response + ' ms';
+
+    el('color-normal-hex').textContent = el('color-normal').value.toUpperCase();
+    el('color-warning-hex').textContent = el('color-warning').value.toUpperCase();
+    el('color-alert-hex').textContent = el('color-alert').value.toUpperCase();
+
+    // slider fill percentages
+    setRangeFill(el('brightness-slider'));
+    setRangeFill(el('floor-slider'));
+    setRangeFill(el('green-slider'));
+    setRangeFill(el('yellow-slider'));
+    setRangeFill(el('decay-slider'));
+    setRangeFill(el('response-slider'));
+
+    // LED strip preview
+    var cfg = { db_normal_switchover: green, db_warning_switchover: yellow };
+    var strip = el('led-strip');
+    strip.innerHTML = '';
+    for (var i = 0; i < 13; i++) {
+      var dbAt = floor + (i / 12) * (Math.max(yellow, green) + 15 - floor);
+      var lamp = document.createElement('i');
+      lamp.style.background = ledColorAt(dbAt, cfg);
+      strip.appendChild(lamp);
     }
+  }
 
-    function applySuggestedFloor(value) {
-      document.getElementById('floor-slider').value = Math.round(value);
-      updatePreview();
+  function setRangeFill(input) {
+    var min = parseFloat(input.min), max = parseFloat(input.max), val = parseFloat(input.value);
+    var pct = max > min ? (val - min) / (max - min) * 100 : 0;
+    input.style.setProperty('--pct', pct + '%');
+  }
+
+  function setModeUi(mode) {
+    document.getElementById('opt-mode-0').classList.toggle('on', mode === 0);
+    document.getElementById('opt-mode-1').classList.toggle('on', mode === 1);
+    document.getElementById('opt-mode-0').querySelector('.ui-radio');
+  }
+
+  function onConfigInput() {
+    renderLichtSummaries();
+    renderLive();
+  }
+
+  ['brightness-slider', 'floor-slider', 'green-slider', 'yellow-slider', 'decay-slider', 'response-slider'].forEach(function(id) {
+    el(id).addEventListener('input', onConfigInput);
+  });
+  ['color-normal', 'color-warning', 'color-alert'].forEach(function(id) {
+    el(id).addEventListener('input', onConfigInput);
+  });
+  [0, 1].forEach(function(m) {
+    el('opt-mode-' + m).addEventListener('click', function() {
+      setModeUi(m);
+      onConfigInput();
+    });
+  });
+  el('btn-floor-current').addEventListener('click', function() {
+    if (lastStatus) {
+      el('floor-slider').value = Math.round(lastStatus.db);
+      onConfigInput();
     }
+  });
 
-    async function updateHistory() {
-      try {
-        const res = await fetch('/api/history');
-        const data = await res.json();
-        if (!Array.isArray(data) || data.length < 2) return;
+  function currentMode() {
+    return document.getElementById('opt-mode-1').classList.contains('on') ? 1 : 0;
+  }
 
-        const canvas = document.getElementById('history-canvas');
-        const ctx = canvas.getContext('2d');
-        const w = canvas.width, h = canvas.height;
-        ctx.clearRect(0, 0, w, h);
+  function hexToInt(hex) { return parseInt(hex.substring(1), 16); }
 
-        const minDb = Math.min(...data) - 2;
-        const maxDb = Math.max(...data) + 2;
-        const range = Math.max(1, maxDb - minDb);
-
-        ctx.strokeStyle = '#667eea';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        data.forEach((db, i) => {
-          const x = (i / (data.length - 1)) * w;
-          const y = h - ((db - minDb) / range) * h;
-          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-        });
-        ctx.stroke();
-      } catch (e) {
-        console.error('History update failed:', e);
-      }
-    }
-
-    async function drawHourlyStats() {
-      try {
-        const res = await fetch('/api/hourly');
-        const data = await res.json();
-
-        const canvas = document.getElementById('hourly-canvas');
-        const ctx = canvas.getContext('2d');
-        const w = canvas.width, h = canvas.height;
-        ctx.clearRect(0, 0, w, h);
-
-        const note = document.getElementById('hourly-note');
-        if (!data.time_synced) {
-          note.textContent = 'Uhrzeit noch nicht synchronisiert - Statistik startet, sobald das Gerät die Zeit per NTP erhalten hat.';
-          note.style.display = 'block';
-        } else {
-          note.style.display = 'none';
-        }
-
-        const sinceEl = document.getElementById('hourly-since');
-        if (data.reset_at) {
-          sinceEl.textContent = '(seit ' + new Date(data.reset_at * 1000).toLocaleTimeString() + ')';
-        } else {
-          sinceEl.textContent = '';
-        }
-
-        if (!Array.isArray(data.hours) || data.hours.length !== 24) return;
-
-        const colorNormal = document.getElementById('color-green').value;
-        const colorWarning = document.getElementById('color-yellow').value;
-        const colorAlert = document.getElementById('color-red').value;
-
-        const barW = w / 24;
-        const msPerHour = 3600000;
-
-        data.hours.forEach((bucket, hour) => {
-          const [normalMs, warningMs, alertMs] = bucket;
-          const total = Math.min(normalMs + warningMs + alertMs, msPerHour);
-          const x = hour * barW;
-
-          let y = h;
-          const segments = [[normalMs, colorNormal], [warningMs, colorWarning], [alertMs, colorAlert]];
-          segments.forEach(([ms, color]) => {
-            const segH = (Math.min(ms, msPerHour) / msPerHour) * h;
-            ctx.fillStyle = color;
-            ctx.fillRect(x + 1, y - segH, barW - 2, segH);
-            y -= segH;
-          });
-
-          if (hour % 4 === 0) {
-            ctx.fillStyle = '#999';
-            ctx.font = '10px sans-serif';
-            ctx.fillText(hour + 'h', x + 2, h - 2);
-          }
-        });
-      } catch (e) {
-        console.error('Hourly stats update failed:', e);
-      }
-    }
-
-    async function resetHourlyStats() {
-      if (!confirm('Statistik wirklich zurücksetzen?')) return;
-      try {
-        await fetch('/api/hourly/reset', { method: 'POST' });
-        drawHourlyStats();
-      } catch (e) {
-        console.error('Hourly stats reset failed:', e);
-      }
-    }
-
-    async function loadConfig() {
-      try {
-        const res = await fetch('/api/config');
-        const data = await res.json();
-        document.querySelector(`input[name="mode"][value="${data.display_mode}"]`).checked = true;
-        document.getElementById('floor-slider').value = Math.round(data.db_floor);
-        document.getElementById('green-slider').value = Math.round(data.db_normal_switchover);
-        document.getElementById('yellow-slider').value = Math.round(data.db_warning_switchover);
-        document.getElementById('brightness-slider').value = data.led_brightness;
-        document.getElementById('color-green').value = '#' + ('000000' + data.color_normal.toString(16).toUpperCase()).slice(-6);
-        document.getElementById('color-yellow').value = '#' + ('000000' + data.color_warning.toString(16).toUpperCase()).slice(-6);
-        document.getElementById('color-red').value = '#' + ('000000' + data.color_alert.toString(16).toUpperCase()).slice(-6);
-        document.getElementById('decay-slider').value = data.decay_ms;
-        document.getElementById('response-slider').value = data.response_ms;
-        updatePreview();
-      } catch (e) {
-        console.error('Failed to load config:', e);
-      }
-    }
-
-    function updatePreview() {
-      const brightness = parseInt(document.getElementById('brightness-slider').value);
-      const floorLevel = parseInt(document.getElementById('floor-slider').value);
-      const greenThresh = parseInt(document.getElementById('green-slider').value);
-      const yellowThresh = parseInt(document.getElementById('yellow-slider').value);
-      const decay = parseInt(document.getElementById('decay-slider').value);
-      const response = parseInt(document.getElementById('response-slider').value);
-      
-      document.getElementById('brightness-val').textContent = brightness;
-      document.getElementById('floor-val').textContent = floorLevel + ' dB';
-      document.getElementById('green-val').textContent = greenThresh + ' dB';
-      document.getElementById('yellow-val').textContent = yellowThresh + ' dB';
-      document.getElementById('decay-val').textContent = decay + ' ms';
-      document.getElementById('response-val').textContent = response + ' ms';
-      
-      const colors = [];
-      for (let i = 0; i < 13; i++) {
-        const dbAtLED = 37 + (i / 12) * 43;
-        let color;
-        if (dbAtLED < greenThresh) {
-          color = '#22c55e';
-        } else if (dbAtLED < yellowThresh) {
-          color = '#eab308';
-        } else {
-          color = '#ef4444';
-        }
-        colors.push(`<div class="led" style="background:${color}"></div>`);
-      }
-      document.getElementById('preview').innerHTML = colors.join('');
-    }
-
-    function setFloorToCurrent() {
-      const currentDb = parseFloat(document.getElementById('live-db').textContent);
-      if (!isNaN(currentDb)) {
-        document.getElementById('floor-slider').value = Math.round(currentDb);
-        updatePreview();
-      }
-    }
-
-    function hexToInt(hex) {
-      return parseInt(hex.substring(1), 16);
-    }
-
-    async function saveConfig() {
-      const mode = document.querySelector('input[name="mode"]:checked').value;
-      const floor = parseInt(document.getElementById('floor-slider').value);
-      const green = parseInt(document.getElementById('green-slider').value);
-      const yellow = parseInt(document.getElementById('yellow-slider').value);
-      const brightness = parseInt(document.getElementById('brightness-slider').value);
-      const colorGreen = hexToInt(document.getElementById('color-green').value);
-      const colorYellow = hexToInt(document.getElementById('color-yellow').value);
-      const colorRed = hexToInt(document.getElementById('color-red').value);
-      const decay = parseInt(document.getElementById('decay-slider').value);
-      const response = parseInt(document.getElementById('response-slider').value);
-      
-      try {
-        const res = await fetch('/api/config', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            display_mode: parseInt(mode),
-            db_floor: floor,
-            db_normal_switchover: green,
-            db_warning_switchover: yellow,
-            led_brightness: brightness,
-            color_normal: colorGreen,
-            color_warning: colorYellow,
-            color_alert: colorRed,
-            decay_ms: decay,
-            response_ms: response
-          })
-        });
-        
-        const status = document.getElementById('status');
-        if (res.ok) {
-          status.className = 'status success';
-          status.textContent = '✓ Configuration saved successfully!';
-        } else {
-          status.className = 'status';
-          status.textContent = '✗ Failed to save configuration';
-        }
-        status.style.display = 'block';
-        setTimeout(() => { status.style.display = 'none'; }, 3000);
-      } catch (e) {
-        console.error('Save failed:', e);
-      }
-    }
-
-    async function loadNetwork() {
-      try {
-        const res = await fetch('/api/network');
-        const data = await res.json();
-        document.getElementById('wifi-ssid').value = data.wifi_ssid || '';
-        document.getElementById('wifi-state').textContent = data.wifi_connected
-          ? ('Verbunden (' + data.wifi_ssid + ')')
-          : (data.wifi_ssid ? 'Nicht verbunden - AP-Fallback aktiv' : 'Kein WLAN konfiguriert - AP-Fallback aktiv');
-
-        document.getElementById('mqtt-host').value = data.mqtt_host || '';
-        document.getElementById('mqtt-port').value = data.mqtt_port || 1883;
-        document.getElementById('mqtt-user').value = data.mqtt_user || '';
-        document.getElementById('tz-string').value = data.tz_string || '';
-      } catch (e) {
-        console.error('Failed to load network settings:', e);
-      }
-    }
-
-    async function saveNetwork() {
-      const ssid = document.getElementById('wifi-ssid').value;
-      const pass = document.getElementById('wifi-pass').value;
-      const tzString = document.getElementById('tz-string').value;
-
-      try {
-        const res = await fetch('/api/network', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ wifi_ssid: ssid, wifi_pass: pass, tz_string: tzString })
-        });
-
-        const status = document.getElementById('wifi-status');
-        if (res.ok) {
-          status.className = 'status success';
-          status.textContent = '✓ Gespeichert - Gerät verbindet neu (kann bis zu 15s dauern)...';
-        } else {
-          status.className = 'status';
-          status.textContent = '✗ Speichern fehlgeschlagen';
-        }
-        status.style.display = 'block';
-        document.getElementById('wifi-pass').value = '';
-        setTimeout(() => { status.style.display = 'none'; loadNetwork(); }, 4000);
-      } catch (e) {
-        console.error('Network save failed:', e);
-      }
-    }
-
-    async function saveMqtt() {
-      const host = document.getElementById('mqtt-host').value;
-      const port = parseInt(document.getElementById('mqtt-port').value) || 1883;
-      const user = document.getElementById('mqtt-user').value;
-      const pass = document.getElementById('mqtt-pass').value;
-
-      try {
-        const res = await fetch('/api/network', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mqtt_host: host, mqtt_port: port, mqtt_user: user, mqtt_pass: pass })
-        });
-
-        const status = document.getElementById('mqtt-status');
-        if (res.ok) {
-          status.className = 'status success';
-          status.textContent = '✓ MQTT-Einstellungen gespeichert';
-        } else {
-          status.className = 'status';
-          status.textContent = '✗ Speichern fehlgeschlagen';
-        }
-        status.style.display = 'block';
-        document.getElementById('mqtt-pass').value = '';
-        setTimeout(() => { status.style.display = 'none'; loadNetwork(); }, 4000);
-      } catch (e) {
-        console.error('MQTT save failed:', e);
-      }
-    }
-
-    async function exportConfig() {
-      try {
-        const res = await fetch('/api/config/export');
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'noiselight-config.json';
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
-      } catch (e) {
-        console.error('Export failed:', e);
-      }
-    }
-
-    async function importConfig(event) {
-      const file = event.target.files[0];
-      event.target.value = '';  // allow re-selecting the same file later
-      if (!file) return;
-
-      const status = document.getElementById('config-io-status');
-      try {
-        const text = await file.text();
-        const res = await fetch('/api/config/import', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: text
-        });
-
-        if (res.ok) {
-          status.className = 'status success';
-          status.textContent = '✓ Importiert - Seite lädt neu...';
-          status.style.display = 'block';
-          setTimeout(() => location.reload(), 2000);
-        } else {
-          status.className = 'status';
-          status.textContent = '✗ Import fehlgeschlagen (ungültige Datei?)';
-          status.style.display = 'block';
-        }
-      } catch (e) {
-        console.error('Import failed:', e);
-        status.className = 'status';
-        status.textContent = '✗ Import fehlgeschlagen';
-        status.style.display = 'block';
-      }
-    }
-
-    function uploadFirmware() {
-      const fileInput = document.getElementById('update-file');
-      const password = document.getElementById('update-pass').value;
-      const status = document.getElementById('update-status');
-      const progressContainer = document.getElementById('update-progress-container');
-      const progressBar = document.getElementById('update-progress-bar');
-
-      const file = fileInput.files[0];
-      if (!file) {
-        status.className = 'status';
-        status.textContent = '✗ Bitte zuerst eine .bin-Datei auswählen';
-        status.style.display = 'block';
-        return;
-      }
-
-      // XMLHttpRequest (not fetch) so xhr.upload.onprogress can drive the
-      // progress bar - fetch doesn't expose upload progress.
-      const xhr = new XMLHttpRequest();
-      xhr.open('POST', '/update', true);
-      xhr.setRequestHeader('Authorization', 'Basic ' + btoa('admin:' + password));
-
-      progressContainer.style.display = 'block';
-      progressBar.style.width = '0%';
-      status.className = 'status';
-      status.textContent = 'Wird hochgeladen...';
-      status.style.display = 'block';
-
-      xhr.upload.onprogress = function(e) {
-        if (e.lengthComputable) {
-          const pct = (e.loaded / e.total) * 100;
-          progressBar.style.width = pct + '%';
-        }
-      };
-
-      xhr.onload = function() {
-        if (xhr.status === 200) {
-          status.className = 'status success';
-          status.textContent = '✓ Erfolgreich - Gerät startet neu...';
-          setTimeout(() => location.reload(), 8000);
-        } else {
-          status.className = 'status';
-          let message = 'Upload fehlgeschlagen (Status ' + xhr.status + ')';
-          try {
-            const data = JSON.parse(xhr.responseText);
-            if (data.message) message = data.message;
-          } catch (e) {}
-          status.textContent = '✗ ' + message;
-        }
-      };
-
-      xhr.onerror = function() {
-        status.className = 'status';
-        status.textContent = '✗ Upload fehlgeschlagen (Netzwerkfehler)';
-      };
-
-      const formData = new FormData();
-      formData.append('firmware', file);
-      xhr.send(formData);
-    }
-
-    window.onload = function() {
-      loadConfig();
-      loadNetwork();
-      updateLiveLevel();
-      setInterval(updateLiveLevel, 200);
-      updateHistory();
-      setInterval(updateHistory, 5000);
-      drawHourlyStats();
-      setInterval(drawHourlyStats, 60000);
+  el('btn-save-licht').addEventListener('click', function() {
+    var body = {
+      display_mode: currentMode(),
+      db_floor: parseInt(el('floor-slider').value, 10),
+      db_normal_switchover: parseInt(el('green-slider').value, 10),
+      db_warning_switchover: parseInt(el('yellow-slider').value, 10),
+      led_brightness: parseInt(el('brightness-slider').value, 10),
+      color_normal: hexToInt(el('color-normal').value),
+      color_warning: hexToInt(el('color-warning').value),
+      color_alert: hexToInt(el('color-alert').value),
+      decay_ms: parseInt(el('decay-slider').value, 10),
+      response_ms: parseInt(el('response-slider').value, 10)
     };
-  </script>
+    fetch('/api/config', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    }).then(function(res) {
+      var status = el('save-licht-status');
+      if (res.ok) {
+        status.textContent = '✓ ' + t('save.ok') + new Date().toLocaleTimeString();
+      } else {
+        status.textContent = '✗ ' + t('save.fail');
+      }
+      setTimeout(function() { status.textContent = ''; }, 4000);
+    }).catch(function() {
+      el('save-licht-status').textContent = '✗ ' + t('save.fail');
+    });
+  });
+
+  // ---- Network / MQTT ----
+  function renderNetwork() {
+    if (!lastNetwork) return;
+    var n = lastNetwork;
+    el('wifi-ssid').value = n.wifi_ssid || '';
+    el('tz-string').value = n.tz_string || '';
+    el('mqtt-host').value = n.mqtt_host || '';
+    el('mqtt-port').value = n.mqtt_port || 1883;
+    el('mqtt-user').value = n.mqtt_user || '';
+
+    var wifiLine = el('wifi-status-line');
+    var wifiText = el('wifi-status-text');
+    if (n.wifi_connected) {
+      wifiLine.classList.remove('ui-off');
+      wifiText.textContent = t('wifi.connected') + (n.wifi_ssid ? ' · ' + n.wifi_ssid : '');
+      el('wifi-val').textContent = n.wifi_ssid || t('wifi.connected');
+    } else {
+      wifiLine.classList.add('ui-off');
+      wifiText.textContent = n.wifi_ssid ? t('wifi.notconnected') : t('wifi.notconfigured');
+      el('wifi-val').textContent = n.wifi_ssid || t('wifi.notset');
+    }
+
+    el('mqtt-val').textContent = n.mqtt_host ? t('mqtt.configured') : t('mqtt.disabled');
+  }
+
+  el('btn-save-wifi').addEventListener('click', function() {
+    var body = {
+      wifi_ssid: el('wifi-ssid').value,
+      wifi_pass: el('wifi-pass').value,
+      tz_string: el('tz-string').value
+    };
+    fetch('/api/network', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    }).then(function(res) {
+      var status = el('wifi-save-status');
+      status.textContent = res.ok ? ('✓ ' + t('wifi.saved')) : ('✗ ' + t('save.fail'));
+      el('wifi-pass').value = '';
+      setTimeout(function() { status.textContent = ''; fetchNetwork(); }, 4000);
+    }).catch(function() {
+      el('wifi-save-status').textContent = '✗ ' + t('save.fail');
+    });
+  });
+
+  el('btn-save-mqtt').addEventListener('click', function() {
+    var body = {
+      mqtt_host: el('mqtt-host').value,
+      mqtt_port: parseInt(el('mqtt-port').value, 10) || 1883,
+      mqtt_user: el('mqtt-user').value,
+      mqtt_pass: el('mqtt-pass').value
+    };
+    fetch('/api/network', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    }).then(function(res) {
+      var status = el('mqtt-save-status');
+      status.textContent = res.ok ? ('✓ ' + t('mqtt.saved')) : ('✗ ' + t('save.fail'));
+      el('mqtt-pass').value = '';
+      setTimeout(function() { status.textContent = ''; fetchNetwork(); }, 4000);
+    }).catch(function() {
+      el('mqtt-save-status').textContent = '✗ ' + t('save.fail');
+    });
+  });
+
+  // ---- Hourly reset ----
+  el('btn-hourly-reset').addEventListener('click', function() {
+    if (!confirm(t('today.resetconfirm'))) return;
+    fetch('/api/hourly/reset', { method: 'POST' }).then(fetchHourly).catch(function() {});
+  });
+
+  // ---- Firmware update ----
+  el('update-file').addEventListener('change', function() {
+    var f = this.files[0];
+    el('update-filename').textContent = f ? f.name : t('fw.file.placeholder');
+    el('update-filename').removeAttribute('data-t');
+  });
+
+  el('btn-upload-fw').addEventListener('click', function() {
+    var fileInput = el('update-file');
+    var password = el('update-pass').value;
+    var status = el('update-status');
+    var bar = el('update-progress-bar');
+
+    var file = fileInput.files[0];
+    if (!file) {
+      status.removeAttribute('data-t');
+      status.textContent = '✗ ' + t('fw.nofile');
+      return;
+    }
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/update', true);
+    xhr.setRequestHeader('Authorization', 'Basic ' + btoa('admin:' + password));
+
+    bar.style.width = '0%';
+    status.removeAttribute('data-t');
+    status.textContent = t('fw.uploading');
+
+    xhr.upload.onprogress = function(e) {
+      if (e.lengthComputable) {
+        bar.style.width = ((e.loaded / e.total) * 100) + '%';
+      }
+    };
+
+    xhr.onload = function() {
+      if (xhr.status === 200) {
+        status.textContent = '✓ ' + t('fw.ok');
+        setTimeout(function() { location.reload(); }, 8000);
+      } else {
+        var message = t('fw.fail') + ' (HTTP ' + xhr.status + ')';
+        try {
+          var data = JSON.parse(xhr.responseText);
+          if (data.message) message = data.message;
+        } catch (e) {}
+        status.textContent = '✗ ' + message;
+      }
+    };
+
+    xhr.onerror = function() {
+      status.textContent = '✗ ' + t('fw.fail');
+    };
+
+    var formData = new FormData();
+    formData.append('firmware', file);
+    xhr.send(formData);
+  });
+
+  // ---- Config export/import ----
+  el('btn-export').addEventListener('click', function() {
+    fetch('/api/config/export').then(function(res) { return res.blob(); }).then(function(blob) {
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = 'noiselight-config.json';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }).catch(function() {});
+  });
+
+  el('btn-import').addEventListener('click', function() { el('import-file').click(); });
+
+  el('import-file').addEventListener('change', function(event) {
+    var file = event.target.files[0];
+    event.target.value = '';
+    if (!file) return;
+
+    var status = el('backup-status');
+    file.text().then(function(text) {
+      return fetch('/api/config/import', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: text
+      });
+    }).then(function(res) {
+      if (res.ok) {
+        status.textContent = '✓ ' + t('backup.importok');
+        setTimeout(function() { location.reload(); }, 2000);
+      } else {
+        status.textContent = '✗ ' + t('backup.importfail');
+      }
+    }).catch(function() {
+      status.textContent = '✗ ' + t('backup.importfail');
+    });
+  });
+
+  // ---- fetch loops ----
+  function fetchStatus() {
+    fetch('/api/status').then(function(res) { return res.json(); }).then(function(data) {
+      lastStatus = data;
+      renderLive();
+    }).catch(function() {});
+  }
+
+  function fetchHistory() {
+    fetch('/api/history').then(function(res) { return res.json(); }).then(function(data) {
+      if (Array.isArray(data) && data.length >= 2) {
+        lastHistory = data;
+        renderHistory();
+        renderLive();
+      }
+    }).catch(function() {});
+  }
+
+  function fetchHourly() {
+    fetch('/api/hourly').then(function(res) { return res.json(); }).then(function(data) {
+      lastHourly = data;
+      renderHourly();
+    }).catch(function() {});
+  }
+
+  function fetchNetwork() {
+    fetch('/api/network').then(function(res) { return res.json(); }).then(function(data) {
+      lastNetwork = data;
+      renderNetwork();
+    }).catch(function() {});
+  }
+
+  function fetchConfig() {
+    fetch('/api/config').then(function(res) { return res.json(); }).then(function(data) {
+      lastConfig = data;
+      setModeUi(data.display_mode);
+      el('brightness-slider').value = data.led_brightness;
+      el('floor-slider').value = Math.round(data.db_floor);
+      el('green-slider').value = Math.round(data.db_normal_switchover);
+      el('yellow-slider').value = Math.round(data.db_warning_switchover);
+      el('decay-slider').value = data.decay_ms;
+      el('response-slider').value = data.response_ms;
+      el('color-normal').value = '#' + ('000000' + data.color_normal.toString(16).toUpperCase()).slice(-6);
+      el('color-warning').value = '#' + ('000000' + data.color_warning.toString(16).toUpperCase()).slice(-6);
+      el('color-alert').value = '#' + ('000000' + data.color_alert.toString(16).toUpperCase()).slice(-6);
+      renderLichtSummaries();
+      renderLive();
+    }).catch(function() {});
+  }
+
+  function renderAll() {
+    renderLive();
+    renderHistory();
+    renderHourly();
+    renderNetwork();
+    if (lastConfig) renderLichtSummaries();
+  }
+
+  fetchConfig();
+  fetchNetwork();
+  fetchStatus();
+  setInterval(fetchStatus, 200);
+  fetchHistory();
+  setInterval(fetchHistory, 5000);
+  fetchHourly();
+  setInterval(fetchHourly, 60000);
+
+  applyLang();
+})();
+</script>
 </body>
 </html>
 )rawliteral";
