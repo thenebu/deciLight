@@ -18,6 +18,7 @@ Ein Echtzeit-Lärmmonitor, der den Geräuschpegel als Ampel mit RGB-LEDs anzeigt
 - [🛒 Verwendete Hardware](#de-verwendete-hardware)
 - [💻 Kompatible Hardware](#de-kompatible-hardware)
 - [🔧 Hardware-Einrichtung](#de-hardware-einrichtung)
+- [🖨️ Gehäuse (3D-Druck)](#de-gehaeuse)
 - [📊 Funktionsweise](#de-funktionsweise)
 - [🎚️ Konfiguration](#de-konfiguration)
 - [🌐 WiFi- und Web-Konfiguration](#de-wifi-web-konfiguration)
@@ -133,6 +134,21 @@ Ein optionaler Taster an GPIO 6 (gegen GND) erlaubt Bedienung ohne WebUI:
 
 Ist kein Taster angeschlossen, bleibt GPIO 6 dank internem Pull-up dauerhaft HIGH und
 es passiert nichts - die Funktion ist also optional und stört ohne Hardware nicht.
+
+<a id="de-gehaeuse"></a>
+## 🖨️ Gehäuse (3D-Druck)
+
+Die 3D-Druckdateien liegen in [`3dprinting/`](./3dprinting) (Fusion-360-Quelldatei
+sowie fertige `.3mf`-Projekte für Base, Cover, Visor, LED-Mount, ESP-Mount, Standfüße,
+Linse und Reflektor). Details zu Druckprofilen findest du in
+[`3dprinting/README.md`](./3dprinting/README.md).
+
+In der Praxis gedruckt: die **Linse** in **PETG, transluzent**, damit das Licht schön
+diffus streut - der Rest des Gehäuses (Base, Cover, Visor, LED-Mount, ESP-Mount,
+Standfüße) in **PLA**. Das weicht vom in `3dprinting/README.md` hinterlegten
+Bambu-Studio-Profil ab (dort ist z. B. PETG/TPU für die übrigen Teile vorgesehen) -
+PLA hat sich für den Innenausbau als völlig ausreichend erwiesen, da das Gehäuse keiner
+Wärme- oder mechanischen Belastung ausgesetzt ist.
 
 <a id="de-funktionsweise"></a>
 ## 📊 Funktionsweise
@@ -577,6 +593,7 @@ A real-time noise monitor that displays sound levels as a traffic light using RG
 - [🛒 Hardware Used](#en-hardware-used)
 - [💻 Compatible Hardware](#en-compatible-hardware)
 - [🔧 Hardware Setup](#en-hardware-setup)
+- [🖨️ Enclosure (3D Printing)](#en-enclosure)
 - [📊 How It Works](#en-how-it-works)
 - [🎚️ Configuration](#en-configuration)
 - [🌐 WiFi & Web Configuration](#en-wifi-web-configuration)
@@ -690,6 +707,20 @@ An optional button on GPIO 6 (to GND) allows control without the WebUI:
 
 Without a button wired up, GPIO 6 stays HIGH via the internal pull-up and nothing
 happens - the feature is optional and inert without the hardware.
+
+<a id="en-enclosure"></a>
+## 🖨️ Enclosure (3D Printing)
+
+The 3D print files live in [`3dprinting/`](./3dprinting) (a Fusion 360 source file plus
+ready-to-slice `.3mf` projects for base, cover, visor, LED mount, ESP mount, feet, lens,
+and reflector). See [`3dprinting/README.md`](./3dprinting/README.md) for print profile
+details.
+
+What was actually printed: the **lens** in **translucent PETG** for a nicely diffused
+light, and the rest of the enclosure (base, cover, visor, LED mount, ESP mount, feet) in
+**PLA**. That differs from the Bambu Studio profile documented in
+`3dprinting/README.md` (which specifies PETG/TPU for the other parts) - PLA turned out
+to be plenty for an indoor enclosure with no heat or mechanical load.
 
 <a id="en-how-it-works"></a>
 ## 📊 How It Works
