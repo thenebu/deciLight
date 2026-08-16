@@ -25,7 +25,6 @@ Ein Echtzeit-Lärmmonitor, der den Geräuschpegel als Ampel mit RGB-LEDs anzeigt
 - [🔑 Passwörter](#de-passwoerter)
 - [📡 OTA-Updates (Over-the-Air)](#de-ota)
 - [🚀 Bauen und Hochladen](#de-bauen-hochladen)
-- [🏷️ Versionierung und Releases](#de-versionierung-releases)
 - [📈 Serielle Ausgabe](#de-serielle-ausgabe)
 - [🔧 Kalibrierung](#de-kalibrierung)
 - [🔴 Fehlerbehebung](#de-fehlerbehebung)
@@ -500,44 +499,6 @@ platformio run -t upload -e esp32-s3-devkitc1-n4r2-ota
 # Or in VS Code: Ctrl+Shift+B → Upload
 ```
 
-<a id="de-versionierung-releases"></a>
-## 🏷️ Versionierung und Releases
-
-`FIRMWARE_VERSION` in `include/config.h` ist die einzige Quelle der Wahrheit. Der Wert
-ist im Web-UI-Footer sichtbar, wird über MQTT als Diagnose-Sensor veröffentlicht und
-benennt die Binärdatei: jedes `pio run` legt automatisch
-`firmware/noiselight-<version>.bin` ab (siehe `copy_firmware_bin.py`). So lässt sich
-nach einem OTA-Update zweifelsfrei prüfen, ob die neue Firmware wirklich läuft.
-
-**Semantik** (locker nach SemVer): Patch für Fehlerbehebungen und interne Optimierungen,
-Minor für neue Funktionen oder sichtbare UI-Änderungen.
-
-**Release-Ablauf** — Git-Tag und `FIRMWARE_VERSION` bleiben synchron, das Tag heißt wie
-die Version mit `v` davor:
-
-```bash
-# 1. FIRMWARE_VERSION in include/config.h anheben
-# 2. Bauen - erzeugt firmware/noiselight-<version>.bin
-pio run -e esp32-s3-devkitc1-n4r2
-
-# 3. Committen, taggen, pushen
-git commit -am "feat: ..."
-git tag -a v1.6.0 -m "noiselight 1.6.0"
-git push origin master --follow-tags
-
-# 4. GitHub-Release mit der Binärdatei als Asset
-gh release create v1.6.0 firmware/noiselight-1.6.0.bin \
-   --repo thenebu/noiselight \
-   --title "noiselight 1.6.0" --notes-file RELEASE_NOTES.md
-```
-
-Die angehängte `.bin` ist genau die Datei, die im Web-UI unter **Firmware aktualisieren**
-hochgeladen werden kann — damit lässt sich ein Gerät aktualisieren, ohne das Repository
-auszuchecken oder eine Entwicklungsumgebung zu installieren.
-
-> `--repo` ist hier nicht optional: dieses Arbeitsverzeichnis hat mehrere Remotes, und
-> `gh` würde sonst das Upstream-Repository ansprechen statt des eigenen Forks.
-
 <a id="de-serielle-ausgabe"></a>
 ## 📈 Serielle Ausgabe
 
@@ -562,13 +523,6 @@ Wenn die Messwerte durchgehend abweichen:
    ```cpp
    #define MIC_OFFSET_DB 3.0103  // Increase/decrease calibration offset
    ```
-
-### Optimale Platzierung
-
-- Mikrofon in der **Raummitte** montieren
-- **Vermeide** die Platzierung nahe Wänden oder Ecken (Reflexionen)
-- **Halte Abstand** zu Vibrationsquellen
-- Sorge für einen **freien Luftweg** (nicht abgedeckt)
 
 <a id="de-fehlerbehebung"></a>
 ## 🔴 Fehlerbehebung
@@ -597,8 +551,11 @@ Wenn die Messwerte durchgehend abweichen:
 <a id="de-lizenz"></a>
 ## 📝 Lizenz
 
-Dieses Projekt basiert auf [deciLight](https://github.com/bbbenji/deciLight) (GPL-3.0).
-Lizenziert unter der GNU General Public License v3.0.
+Dieses Projekt startete als Fork von [deciLight](https://github.com/bbbenji/deciLight) (GPL-3.0).
+Die Grundidee (ESP32 + I2S-Mikrofon + NeoPixel-Lichtsäule) und die I2S-Audio-Basis stammen von dort;
+Web-UI, Netzwerk-Stack (WiFi STA/AP-Fallback, mDNS), MQTT/Home-Assistant-Integration und die
+Audio-Pipeline wurden seitdem vollständig neu geschrieben. Lizenziert unter der GNU General Public
+License v3.0.
 
 ---
 
@@ -627,7 +584,6 @@ A real-time noise monitor that displays sound levels as a traffic light using RG
 - [🔑 Passwords](#en-passwords)
 - [📡 OTA (Over-the-Air) Updates](#en-ota)
 - [🚀 Building & Uploading](#en-building-uploading)
-- [🏷️ Versioning & Releases](#en-versioning-releases)
 - [📈 Serial Output](#en-serial-output)
 - [🔧 Calibration](#en-calibration)
 - [🔴 Troubleshooting](#en-troubleshooting)
@@ -1079,44 +1035,6 @@ platformio run -t upload -e esp32-s3-devkitc1-n4r2-ota
 # Or in VS Code: Ctrl+Shift+B → Upload
 ```
 
-<a id="en-versioning-releases"></a>
-## 🏷️ Versioning & Releases
-
-`FIRMWARE_VERSION` in `include/config.h` is the single source of truth. It is shown in
-the web UI footer, published over MQTT as a diagnostic sensor, and names the binary:
-every `pio run` drops `firmware/noiselight-<version>.bin` automatically (see
-`copy_firmware_bin.py`). That makes it verifiable after an OTA update whether the new
-firmware is actually running.
-
-**Semantics** (loosely SemVer): patch for bug fixes and internal optimisations, minor
-for new features or visible UI changes.
-
-**Release flow** — the git tag and `FIRMWARE_VERSION` stay in sync, the tag being the
-version with a `v` prefix:
-
-```bash
-# 1. Bump FIRMWARE_VERSION in include/config.h
-# 2. Build - produces firmware/noiselight-<version>.bin
-pio run -e esp32-s3-devkitc1-n4r2
-
-# 3. Commit, tag, push
-git commit -am "feat: ..."
-git tag -a v1.6.0 -m "noiselight 1.6.0"
-git push origin master --follow-tags
-
-# 4. GitHub release with the binary attached
-gh release create v1.6.0 firmware/noiselight-1.6.0.bin \
-   --repo thenebu/noiselight \
-   --title "noiselight 1.6.0" --notes-file RELEASE_NOTES.md
-```
-
-The attached `.bin` is exactly the file you upload under **Firmware aktualisieren** in
-the web UI — so a device can be updated without checking out the repository or
-installing a toolchain.
-
-> `--repo` is not optional here: this working copy has several remotes, and `gh` would
-> otherwise target the upstream repository instead of your own fork.
-
 <a id="en-serial-output"></a>
 ## 📈 Serial Output
 
@@ -1141,13 +1059,6 @@ If readings are consistently off:
    ```cpp
    #define MIC_OFFSET_DB 3.0103  // Increase/decrease calibration offset
    ```
-
-### Optimal Setup
-
-- Mount microphone in **center of room**
-- **Avoid** placing near walls or corners (reflections)
-- **Keep away** from vibration sources
-- Ensure **clear air path** (not covered)
 
 <a id="en-troubleshooting"></a>
 ## 🔴 Troubleshooting
@@ -1176,5 +1087,8 @@ If readings are consistently off:
 <a id="en-license"></a>
 ## 📝 License
 
-This project is adapted from [deciLight](https://github.com/bbbenji/deciLight) (GPL-3.0).
-Licensed under GNU General Public License v3.0.
+This project started as a fork of [deciLight](https://github.com/bbbenji/deciLight) (GPL-3.0).
+The core idea (ESP32 + I2S microphone + NeoPixel light column) and the I2S audio foundation come
+from there; the web UI, network stack (WiFi STA/AP fallback, mDNS), MQTT/Home Assistant
+integration, and audio pipeline have since been rewritten from scratch. Licensed under the GNU
+General Public License v3.0.
