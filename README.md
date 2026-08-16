@@ -91,8 +91,22 @@ Partitionierung) sowie generische AVR-/STM32-Boards ohne ESP-IDF-Unterstützung.
 | **I2S Word Select** | GPIO 4 | Blau | Mikrofon L/R-Takt |
 | **I2S Serial Clock** | GPIO 5 | Weiß | Mikrofon-Bittakt |
 | **I2S Serial Data** | GPIO 2 | Gelb | Mikrofon-Audiodaten |
+| **Modus-Taster** | GPIO 6 | - | Taster gegen GND (interner Pull-up, aktiv LOW) |
 | **Stromversorgung (5V)** | 5V | - | USB-Netzteil |
 | **GND** | GND | - | Masse |
+
+### Modus-Taster
+
+Ein optionaler Taster an GPIO 6 (gegen GND) erlaubt Bedienung ohne WebUI:
+
+- **Kurzer Druck**: schaltet den Anzeigemodus weiter (Ampel → VU-Meter → Babyphone →
+  Einfarbig → Ampel …)
+- **Langer Druck (gehalten, >600 ms)**: rampt die LED-Helligkeit hoch/runter; an den
+  Grenzen (0/255) dreht die Richtung automatisch um (Ping-Pong). Beim Loslassen wird
+  der erreichte Wert dauerhaft gespeichert.
+
+Ist kein Taster angeschlossen, bleibt GPIO 6 dank internem Pull-up dauerhaft HIGH und
+es passiert nichts - die Funktion ist also optional und stört ohne Hardware nicht.
 
 ## 📊 Funktionsweise
 
@@ -638,8 +652,21 @@ partitioning) or generic AVR/STM32 boards without ESP-IDF support.
 | **I2S Word Select** | GPIO 4 | Blue | Microphone L/R clock |
 | **I2S Serial Clock** | GPIO 5 | White | Microphone bit clock |
 | **I2S Serial Data** | GPIO 2 | Yellow | Microphone audio data |
+| **Mode button** | GPIO 6 | - | Button to GND (internal pull-up, active LOW) |
 | **Power (5V)** | 5V | - | USB power supply |
 | **GND** | GND | - | Ground |
+
+### Mode Button
+
+An optional button on GPIO 6 (to GND) allows control without the WebUI:
+
+- **Short press**: advances the display mode (Traffic Light → VU Meter → Babyphone →
+  Solid Color → Traffic Light …)
+- **Long press (held, >600ms)**: ramps LED brightness up/down; at the bounds (0/255)
+  the direction automatically flips (ping-pong). Releasing persists the reached value.
+
+Without a button wired up, GPIO 6 stays HIGH via the internal pull-up and nothing
+happens - the feature is optional and inert without the hardware.
 
 ## 📊 How It Works
 

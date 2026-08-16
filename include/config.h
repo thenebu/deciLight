@@ -37,13 +37,22 @@ enum NoiseLevel {
 #define I2S_SCK 5                // I2S Serial Clock (BCLK) - WHITE wire
 #define I2S_SD 2                // I2S Serial Data - YELLOW wire
 #define I2S_PORT I2S_NUM_0      // Use I2S peripheral 0
+#define BUTTON_PIN 6             // Mode button, wired to GND, uses internal pull-up (active LOW)
+
+//
+// BUTTON TIMING
+//
+#define BUTTON_DEBOUNCE_MS 30              // Ignore raw level changes faster than this
+#define BUTTON_LONG_PRESS_MS 600           // Held longer than this = long press (brightness ramp) instead of short press (mode switch)
+#define BUTTON_RAMP_INTERVAL_MS 30         // Time between brightness steps while held
+#define BUTTON_RAMP_STEP 4                 // Brightness change (0-255) per ramp step
 
 //
 // LED CONFIGURATION
 //
 #define NUM_LEDS 7               // 7 WS2812 pixels
 #define LED_BRIGHTNESS 25       // 0-255
-#define DISPLAY_MODE 1          // 0=TRAFFIC_LIGHT, 1=VU_METER
+#define DISPLAY_MODE 1          // 0=TRAFFIC_LIGHT, 1=VU_METER, 2=BABYPHONE, 3=SOLID_COLOR
 
 //
 // NOISE THRESHOLDS
@@ -51,6 +60,14 @@ enum NoiseLevel {
 #define DB_FLOOR 37.0           // Noise floor baseline (~37dB)
 #define DB_NORMAL_SWITCHOVER 50.0   // Below: NORMAL, Above: WARNING
 #define DB_WARNING_SWITCHOVER 65.0  // Below: WARNING, Above: ALERT
+
+//
+// SOLID COLOR MODE (display_mode == 3): one user-picked color, shown either
+// static or animated (blink / breathe / chase around the strip).
+//
+#define SOLID_COLOR 0x3B82F6     // default: a calm blue
+#define SOLID_EFFECT 0           // 0=fest, 1=blinken, 2=faden, 3=lauflicht
+#define SOLID_SPEED_MS 1500      // effect period: blink cycle / breathe cycle / one lap of the strip
 
 //
 // BABYPHONE MODE
@@ -177,6 +194,6 @@ constexpr double MIC_REF_AMPL = pow(10, double(MIC_SENSITIVITY) / 20) * ((1 << (
 // Manually bumped on each release - not tied to git/build automatically.
 // Shown in the WebUI footer and published over MQTT, so an OTA update can
 // be confirmed to have actually taken.
-#define FIRMWARE_VERSION "1.7.0"
+#define FIRMWARE_VERSION "1.9.0"
 
 #endif // CONFIG_H

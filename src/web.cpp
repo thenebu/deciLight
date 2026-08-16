@@ -57,7 +57,10 @@ WebService::WebService()
     .babyphone_sustain_s = (uint16_t)(BABYPHONE_SUSTAIN_MS / 1000),
     .babyphone_clear_s = (uint16_t)(BABYPHONE_CLEAR_MS / 1000),
     .babyphone_night_color = BABYPHONE_NIGHT_COLOR,
-    .babyphone_night_brightness = BABYPHONE_NIGHT_BRIGHTNESS
+    .babyphone_night_brightness = BABYPHONE_NIGHT_BRIGHTNESS,
+    .solid_color = SOLID_COLOR,
+    .solid_effect = SOLID_EFFECT,
+    .solid_speed_ms = SOLID_SPEED_MS
   };
 }
 
@@ -273,6 +276,36 @@ Config WebService::getConfigSnapshot() {
   return snapshot;
 }
 
+//============================================
+// WebService::cycleDisplayMode() - mode button, short press
+//============================================
+void WebService::cycleDisplayMode() {
+  portENTER_CRITICAL(&config_mux);
+  config.display_mode = (config.display_mode + 1) % 4;  // 0=TRAFFIC_LIGHT..3=SOLID_COLOR
+  portEXIT_CRITICAL(&config_mux);
+  needs_save = true;
+}
+
+//============================================
+// WebService::adjustLedBrightness() - mode button, long press (ramp)
+//============================================
+uint8_t WebService::adjustLedBrightness(int delta) {
+  portENTER_CRITICAL(&config_mux);
+  int v = (int)config.led_brightness + delta;
+  config.led_brightness = (uint8_t)constrain(v, 0, 255);
+  uint8_t result = config.led_brightness;
+  portEXIT_CRITICAL(&config_mux);
+  return result;
+}
+
+//============================================
+// WebService::persistConfig() - defer an NVS write to the web task, same
+// path handleApiSet() uses (see webTaskHandler()'s needs_save check).
+//============================================
+void WebService::persistConfig() {
+  needs_save = true;
+}
+
 double WebService::getCurrentDb() {
   portENTER_CRITICAL(&dB_mux);
   double snapshot = current_dB;
@@ -464,6 +497,9 @@ void WebService::configToJson(const Config& cfg, JsonObject obj) {
   obj["babyphone_clear_s"] = cfg.babyphone_clear_s;
   obj["babyphone_night_color"] = cfg.babyphone_night_color;
   obj["babyphone_night_brightness"] = cfg.babyphone_night_brightness;
+  obj["solid_color"] = cfg.solid_color;
+  obj["solid_effect"] = cfg.solid_effect;
+  obj["solid_speed_ms"] = cfg.solid_speed_ms;
 }
 
 // Applies whichever recognized fields are present in `obj` onto `cfg`,
@@ -480,7 +516,7 @@ void WebService::configToJson(const Config& cfg, JsonObject obj) {
 void WebService::applyJsonToConfig(JsonObjectConst obj, Config& cfg) {
   if (obj["display_mode"].is<int>()) {
     int v = obj["display_mode"].as<int>();
-    cfg.display_mode = constrain(v, 0, 2);
+    cfg.display_mode = constrain(v, 0, 3);
   }
 
   if (obj["db_floor"].is<float>()) {
@@ -552,6 +588,21 @@ void WebService::applyJsonToConfig(JsonObjectConst obj, Config& cfg) {
     int v = obj["babyphone_night_brightness"].as<int>();
     cfg.babyphone_night_brightness = constrain(v, 0, 255);
   }
+
+  if (obj["solid_color"].is<uint32_t>()) {
+    uint32_t v = obj["solid_color"].as<uint32_t>();
+    cfg.solid_color = constrain(v, 0u, 0xFFFFFFu);
+  }
+
+  if (obj["solid_effect"].is<int>()) {
+    int v = obj["solid_effect"].as<int>();
+    cfg.solid_effect = constrain(v, 0, 3);
+  }
+
+  if (obj["solid_speed_ms"].is<int>()) {
+    int v = obj["solid_speed_ms"].as<int>();
+    cfg.solid_speed_ms = constrain(v, 100, 5000);
+  }
 }
 
 // Shared field-merge for NetworkSettings, used by both handleNetworkSet()
@@ -601,11 +652,12 @@ void WebService::handleApiSet() {
   const String& body = server->arg("plain");
   log_i("Received JSON: %s", body.c_str());
 
-  // 768, not 512: deserializing from a String makes ArduinoJson duplicate
-  // every key into the document's pool. 15 slots (240B) plus the 248 bytes
-  // of key text left just 24 bytes of headroom - one added field would have
-  // silently overflowed, which is exactly what the check below now catches.
-  DynamicJsonDocument doc(768);
+  // 1024, not 768: deserializing from a String makes ArduinoJson duplicate
+  // every key into the document's pool. The Config struct grew from 15 to
+  // 18 fields (added solid_color/solid_effect/solid_speed_ms) - 768 only
+  // left 24 bytes of headroom at 15 fields, which the 3 new ones would have
+  // silently overflowed. The check below still catches any future overflow.
+  DynamicJsonDocument doc(1024);
   DeserializationError err = deserializeJson(doc, body);
   if (err) {
     log_e("[WEB] JSON parse failed: %s", err.c_str());
@@ -1030,6 +1082,9 @@ void WebService::loadConfig() {
   config.babyphone_clear_s = prefs.getUShort("bp_clear", BABYPHONE_CLEAR_MS / 1000);
   config.babyphone_night_color = prefs.getUInt("bp_color", BABYPHONE_NIGHT_COLOR);
   config.babyphone_night_brightness = prefs.getUChar("bp_bright", BABYPHONE_NIGHT_BRIGHTNESS);
+  config.solid_color = prefs.getUInt("solid_color", SOLID_COLOR);
+  config.solid_effect = prefs.getUChar("solid_fx", SOLID_EFFECT);
+  config.solid_speed_ms = prefs.getUShort("solid_speed", SOLID_SPEED_MS);
   prefs.end();
 
   log_i("Config loaded: mode=%d decay=%dms response=%dms",
@@ -1054,10 +1109,14 @@ void WebService::saveConfig() {
   prefs.putUShort("bp_clear", config.babyphone_clear_s);
   prefs.putUInt("bp_color", config.babyphone_night_color);
   prefs.putUChar("bp_bright", config.babyphone_night_brightness);
+  prefs.putUInt("solid_color", config.solid_color);
+  prefs.putUChar("solid_fx", config.solid_effect);
+  prefs.putUShort("solid_speed", config.solid_speed_ms);
   prefs.end();
 
   const char* mode_str = (config.display_mode == 0) ? "TRAFFIC_LIGHT" :
-    (config.display_mode == 1) ? "VU_METER" : "BABYPHONE";
+    (config.display_mode == 1) ? "VU_METER" :
+    (config.display_mode == 2) ? "BABYPHONE" : "SOLID_COLOR";
   log_i("=== CONFIG SAVED ===");
   log_i("Mode: %s", mode_str);
   log_i("Floor: %.1f dB", config.db_floor);
@@ -1487,6 +1546,10 @@ const char* html_ui = R"rawliteral(
               <div class="ui-optt"><i class="ui-radio"></i><span data-t="mode.baby">Babyphone</span></div>
               <small data-t="mode.baby.desc">Warmes Nachtlicht, Alarm nur per MQTT/Home Assistant.</small>
             </button>
+            <button type="button" class="ui-opt" id="opt-mode-3" data-mode="3">
+              <div class="ui-optt"><i class="ui-radio"></i><span data-t="mode.color">Einzelfarbe</span></div>
+              <small data-t="mode.color.desc">Eine frei gew&auml;hlte Farbe - fest, blinkend, faden oder als Lauflicht.</small>
+            </button>
           </div>
           <div class="ui-hint" data-t="mode.instant">Wird sofort &uuml;bernommen - kein Speichern n&ouml;tig.</div>
           <div class="ui-saved" id="save-mode-status"></div>
@@ -1585,6 +1648,34 @@ const char* html_ui = R"rawliteral(
             <div class="ui-hint" data-t="baby.listen.hint">Zum Mith&ouml;ren die Karte &quot;Live h&ouml;ren&quot; oben benutzen - sie funktioniert in jedem Anzeigemodus.</div>
           </div>
         </details>
+
+        <details class="ui-d" id="d-solid">
+          <summary class="ui-sum"><b data-t="solid.summary">Einzelfarbe</b><span class="ui-val" id="solid-val">--</span><i class="ui-chev"></i></summary>
+          <div class="ui-body">
+            <div class="ui-swatchrow">
+              <div class="ui-swatch"><input type="color" id="solid-color" value="#3B82F6"><em data-t="solid.color">Farbe</em><code id="solid-color-hex">#3B82F6</code></div>
+            </div>
+            <div class="ui-choice">
+              <button type="button" class="ui-opt" id="opt-fx-0" data-fx="0">
+                <div class="ui-optt"><i class="ui-radio"></i><span data-t="solid.fx.solid">Fest</span></div>
+              </button>
+              <button type="button" class="ui-opt" id="opt-fx-1" data-fx="1">
+                <div class="ui-optt"><i class="ui-radio"></i><span data-t="solid.fx.blink">Blinken</span></div>
+              </button>
+              <button type="button" class="ui-opt" id="opt-fx-2" data-fx="2">
+                <div class="ui-optt"><i class="ui-radio"></i><span data-t="solid.fx.fade">Faden</span></div>
+              </button>
+              <button type="button" class="ui-opt" id="opt-fx-3" data-fx="3">
+                <div class="ui-optt"><i class="ui-radio"></i><span data-t="solid.fx.chase">Lauflicht</span></div>
+              </button>
+            </div>
+            <div class="ui-field" id="solid-speed-field">
+              <div class="ui-lab"><span data-t="solid.speed.label">Geschwindigkeit</span><span class="ui-num" id="solid-speed-num">-- ms</span></div>
+              <input type="range" class="ui-range" id="solid-speed-slider" min="200" max="4000" step="100" value="1500">
+              <div class="ui-hint" data-t="solid.speed.hint">Kleiner Wert = schneller.</div>
+            </div>
+          </div>
+        </details>
       </div>
 
       <div class="ui-row-btn">
@@ -1680,7 +1771,7 @@ const char* html_ui = R"rawliteral(
   var STR = {
     de: {
       'fact.peak':'Spitze 5 min','fact.thresh':'Schwellen','fact.mode':'Modus',
-      'mode.traffic':'Ampel','mode.vu':'VU-Meter','mode.baby':'Babyphone',
+      'mode.traffic':'Ampel','mode.vu':'VU-Meter','mode.baby':'Babyphone','mode.color':'Einzelfarbe',
       'pill.quiet':'Ruhig','pill.warn':'Laut','pill.alert':'Zu laut',
       'hist.title':'Verlauf','hist.sub':'letzte 5 min','hist.now':'jetzt',
       'today.title':'Heute','today.sub':'seit 00:00','today.reset':'Tag zurücksetzen',
@@ -1696,6 +1787,7 @@ const char* html_ui = R"rawliteral(
       'mode.traffic.desc':'Der ganze Streifen leuchtet grün, gelb oder rot.',
       'mode.vu.desc':'Der Ausschlag wächst mit der Lautstärke.',
       'mode.baby.desc':'Warmes Nachtlicht, Alarm nur per MQTT/Home Assistant.',
+      'mode.color.desc':'Eine frei gewählte Farbe – fest, blinkend, faden oder als Lauflicht.',
       'bright.summary':'Helligkeit & Farben',
       'bright.label':'Helligkeit',
       'sw.normal':'Ruhig','sw.warning':'Laut','sw.alert':'Zu laut',
@@ -1717,6 +1809,11 @@ const char* html_ui = R"rawliteral(
       'baby.color':'Nachtlicht',
       'baby.bright.label':'Nachtlicht-Helligkeit',
       'baby.alarm.hint':'Der Alarm wird ausschließlich per MQTT an Home Assistant gemeldet – die LED bleibt unverändert im Nachtlicht.',
+      'solid.summary':'Einzelfarbe',
+      'solid.color':'Farbe',
+      'solid.fx.solid':'Fest','solid.fx.blink':'Blinken','solid.fx.fade':'Faden','solid.fx.chase':'Lauflicht',
+      'solid.speed.label':'Geschwindigkeit',
+      'solid.speed.hint':'Kleiner Wert = schneller.',
       'baby.listen.hint':'Zum Mithören die Karte \u201eLive hören\u201c oben benutzen – sie funktioniert in jedem Anzeigemodus.',
       'listen.title':'Live hören',
       'listen.sub':'ins Zimmer hören',
@@ -1770,7 +1867,7 @@ const char* html_ui = R"rawliteral(
     },
     en: {
       'fact.peak':'Peak 5 min','fact.thresh':'Thresholds','fact.mode':'Mode',
-      'mode.traffic':'Traffic light','mode.vu':'VU meter','mode.baby':'Babyphone',
+      'mode.traffic':'Traffic light','mode.vu':'VU meter','mode.baby':'Babyphone','mode.color':'Single color',
       'pill.quiet':'Quiet','pill.warn':'Loud','pill.alert':'Too loud',
       'hist.title':'History','hist.sub':'last 5 min','hist.now':'now',
       'today.title':'Today','today.sub':'since 00:00','today.reset':'Reset today',
@@ -1786,6 +1883,7 @@ const char* html_ui = R"rawliteral(
       'mode.traffic.desc':'The whole strip glows green, yellow or red.',
       'mode.vu.desc':'The lit portion grows with volume.',
       'mode.baby.desc':'Warm night light, alarm only via MQTT/Home Assistant.',
+      'mode.color.desc':'A color of your choice - solid, blinking, fading, or a running chase.',
       'bright.summary':'Brightness & colours',
       'bright.label':'Brightness',
       'sw.normal':'Quiet','sw.warning':'Loud','sw.alert':'Too loud',
@@ -1806,6 +1904,11 @@ const char* html_ui = R"rawliteral(
       'baby.timing.hint':'The alarm only fires after an uninterrupted loud phase and only clears after an uninterrupted quiet phase – brief dips don\'t count.',
       'baby.color':'Night light',
       'baby.bright.label':'Night light brightness',
+      'solid.summary':'Single color',
+      'solid.color':'Color',
+      'solid.fx.solid':'Solid','solid.fx.blink':'Blink','solid.fx.fade':'Fade','solid.fx.chase':'Chase',
+      'solid.speed.label':'Speed',
+      'solid.speed.hint':'Lower value = faster.',
       'baby.alarm.hint':'The alarm is reported to Home Assistant via MQTT only – the LED stays unchanged as the night light.',
       'baby.listen.hint':'To listen in, use the \u201cListen live\u201d card above – it works in every display mode.',
       'listen.title':'Listen live',
@@ -1993,8 +2096,7 @@ const char* html_ui = R"rawliteral(
     el('scale-3').textContent = Math.round(maxDb);
 
     el('fact-thresh').textContent = Math.round(cfg.db_normal_switchover) + ' / ' + Math.round(cfg.db_warning_switchover);
-    el('fact-mode').textContent = t(cfg.display_mode === 0 ? 'mode.traffic' :
-      (cfg.display_mode === 1 ? 'mode.vu' : 'mode.baby'));
+    el('fact-mode').textContent = t(modeLabelKey(cfg.display_mode));
 
     if (lastHistory && lastHistory.length) {
       var peak = Math.max.apply(null, lastHistory);
@@ -2099,9 +2201,17 @@ const char* html_ui = R"rawliteral(
     return el('color-alert').value;
   }
 
+  function modeLabelKey(mode) {
+    return mode === 0 ? 'mode.traffic' : mode === 1 ? 'mode.vu' : mode === 2 ? 'mode.baby' : 'mode.color';
+  }
+
+  function fxLabelKey(fx) {
+    return fx === 0 ? 'solid.fx.solid' : fx === 1 ? 'solid.fx.blink' : fx === 2 ? 'solid.fx.fade' : 'solid.fx.chase';
+  }
+
   function renderLichtSummaries() {
     var mode = currentMode();
-    el('mode-val').textContent = t(mode === 0 ? 'mode.traffic' : (mode === 1 ? 'mode.vu' : 'mode.baby'));
+    el('mode-val').textContent = t(modeLabelKey(mode));
 
     var brightness = parseInt(el('brightness-slider').value, 10);
     el('bright-val').textContent = Math.round(brightness / 255 * 100) + ' %';
@@ -2136,6 +2246,13 @@ const char* html_ui = R"rawliteral(
     el('baby-val').textContent = babyTrigger + ' dB';
     el('baby-color-hex').textContent = el('baby-color').value.toUpperCase();
 
+    var fx = currentFx();
+    var solidSpeed = parseInt(el('solid-speed-slider').value, 10);
+    el('solid-color-hex').textContent = el('solid-color').value.toUpperCase();
+    el('solid-speed-num').textContent = solidSpeed + ' ms';
+    el('solid-speed-field').style.display = fx === 0 ? 'none' : '';
+    el('solid-val').textContent = t(fxLabelKey(fx));
+
     // slider fill percentages
     setRangeFill(el('brightness-slider'));
     setRangeFill(el('floor-slider'));
@@ -2147,6 +2264,7 @@ const char* html_ui = R"rawliteral(
     setRangeFill(el('baby-sustain-slider'));
     setRangeFill(el('baby-clear-slider'));
     setRangeFill(el('baby-bright-slider'));
+    setRangeFill(el('solid-speed-slider'));
 
     // LED strip preview
     var cfg = { db_normal_switchover: green, db_warning_switchover: yellow };
@@ -2170,6 +2288,20 @@ const char* html_ui = R"rawliteral(
     document.getElementById('opt-mode-0').classList.toggle('on', mode === 0);
     document.getElementById('opt-mode-1').classList.toggle('on', mode === 1);
     document.getElementById('opt-mode-2').classList.toggle('on', mode === 2);
+    document.getElementById('opt-mode-3').classList.toggle('on', mode === 3);
+  }
+
+  function setFxUi(fx) {
+    for (var i = 0; i < 4; i++) {
+      document.getElementById('opt-fx-' + i).classList.toggle('on', fx === i);
+    }
+  }
+
+  function currentFx() {
+    for (var i = 0; i < 4; i++) {
+      if (document.getElementById('opt-fx-' + i).classList.contains('on')) return i;
+    }
+    return 0;
   }
 
   function onConfigInput() {
@@ -2178,11 +2310,21 @@ const char* html_ui = R"rawliteral(
   }
 
   ['brightness-slider', 'floor-slider', 'green-slider', 'yellow-slider', 'decay-slider', 'response-slider',
-   'baby-trigger-slider', 'baby-sustain-slider', 'baby-clear-slider', 'baby-bright-slider'].forEach(function(id) {
+   'baby-trigger-slider', 'baby-sustain-slider', 'baby-clear-slider', 'baby-bright-slider',
+   'solid-speed-slider'].forEach(function(id) {
     el(id).addEventListener('input', onConfigInput);
   });
-  ['color-normal', 'color-warning', 'color-alert', 'baby-color'].forEach(function(id) {
+  ['color-normal', 'color-warning', 'color-alert', 'baby-color', 'solid-color'].forEach(function(id) {
     el(id).addEventListener('input', onConfigInput);
+  });
+  // Effect choice, same "select then Licht-save" flow as colors/sliders -
+  // not applied instantly like the mode buttons, since it's a setting of
+  // the already-selected Einzelfarbe mode rather than a mode switch itself.
+  [0, 1, 2, 3].forEach(function(fx) {
+    el('opt-fx-' + fx).addEventListener('click', function() {
+      setFxUi(fx);
+      onConfigInput();
+    });
   });
   // Applying the mode on click, rather than collecting it into the "Licht"
   // save, is what keeps the status card at the top of the page honest: it
@@ -2191,7 +2333,7 @@ const char* html_ui = R"rawliteral(
   // until the next reload. Now the POST is followed by a fetchConfig(), and
   // the tile is also updated optimistically so it reacts on the same frame
   // as the radio button.
-  [0, 1, 2].forEach(function(m) {
+  [0, 1, 2, 3].forEach(function(m) {
     el('opt-mode-' + m).addEventListener('click', function() {
       setModeUi(m);
       renderLichtSummaries();
@@ -2225,6 +2367,7 @@ const char* html_ui = R"rawliteral(
   });
 
   function currentMode() {
+    if (document.getElementById('opt-mode-3').classList.contains('on')) return 3;
     if (document.getElementById('opt-mode-2').classList.contains('on')) return 2;
     if (document.getElementById('opt-mode-1').classList.contains('on')) return 1;
     return 0;
@@ -2250,7 +2393,10 @@ const char* html_ui = R"rawliteral(
       babyphone_sustain_s: parseInt(el('baby-sustain-slider').value, 10),
       babyphone_clear_s: parseInt(el('baby-clear-slider').value, 10),
       babyphone_night_color: hexToInt(el('baby-color').value),
-      babyphone_night_brightness: parseInt(el('baby-bright-slider').value, 10)
+      babyphone_night_brightness: parseInt(el('baby-bright-slider').value, 10),
+      solid_color: hexToInt(el('solid-color').value),
+      solid_effect: currentFx(),
+      solid_speed_ms: parseInt(el('solid-speed-slider').value, 10)
     };
     fetch('/api/config', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
@@ -2683,6 +2829,9 @@ const char* html_ui = R"rawliteral(
       el('baby-clear-slider').value = data.babyphone_clear_s;
       el('baby-bright-slider').value = data.babyphone_night_brightness;
       el('baby-color').value = '#' + ('000000' + data.babyphone_night_color.toString(16).toUpperCase()).slice(-6);
+      el('solid-color').value = '#' + ('000000' + data.solid_color.toString(16).toUpperCase()).slice(-6);
+      el('solid-speed-slider').value = data.solid_speed_ms;
+      setFxUi(data.solid_effect);
       renderLichtSummaries();
       renderLive();
     }).catch(function() {});

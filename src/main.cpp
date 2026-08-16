@@ -130,6 +130,10 @@ void setup() {
     }
   }
 
+  // Mode button (GPIO 6, wired to GND) - internal pull-up, so idle reads
+  // HIGH and a press pulls it LOW.
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+
   // Initialize LED controller
   led_controller.init();
 
@@ -169,6 +173,65 @@ void loop() {
 
   // Update web interface with current level
   web_service.updateLevel(level_dB);
+
+  //
+  // MODE BUTTON (GPIO 6): short press = next display mode, long press
+  // (held) = ramp led_brightness up/down, bouncing off 0/255. All state
+  // here is static because this runs on the single main-loop task - no
+  // locking needed, unlike the cross-core config access above.
+  //
+  {
+    unsigned long now_ms = millis();
+
+    static int last_raw_state = HIGH;
+    static unsigned long last_edge_ms = 0;
+    static bool button_down = false;         // debounced state
+    static unsigned long press_start_ms = 0;
+    static bool ramping = false;              // crossed into long-press this hold
+    static bool ramp_up = true;               // persists across presses, flips at 0/255
+    static unsigned long last_ramp_step_ms = 0;
+
+    int raw = digitalRead(BUTTON_PIN);
+    if (raw != last_raw_state) {
+      last_edge_ms = now_ms;
+      last_raw_state = raw;
+    }
+
+    if (now_ms - last_edge_ms > BUTTON_DEBOUNCE_MS) {
+      bool pressed_now = (raw == LOW);
+      if (pressed_now != button_down) {
+        button_down = pressed_now;
+        if (button_down) {
+          // Just pressed
+          press_start_ms = now_ms;
+          ramping = false;
+        } else {
+          // Just released
+          if (ramping) {
+            web_service.persistConfig();  // ramp's final brightness -> NVS
+          } else {
+            web_service.cycleDisplayMode();
+          }
+        }
+      }
+    }
+
+    if (button_down) {
+      if (!ramping && (now_ms - press_start_ms >= BUTTON_LONG_PRESS_MS)) {
+        ramping = true;
+        last_ramp_step_ms = now_ms;
+      }
+      if (ramping && (now_ms - last_ramp_step_ms >= BUTTON_RAMP_INTERVAL_MS)) {
+        last_ramp_step_ms = now_ms;
+        int delta = ramp_up ? BUTTON_RAMP_STEP : -BUTTON_RAMP_STEP;
+        uint8_t new_brightness = web_service.adjustLedBrightness(delta);
+        // Hit a bound: flip direction so continuing to hold bounces back,
+        // and the next press-and-hold picks up where this one left off.
+        if (new_brightness == 255) ramp_up = false;
+        else if (new_brightness == 0) ramp_up = true;
+      }
+    }
+  }
 
   // The two statistics calls below are throttled rather than run on every
   // iteration: accumulateHourlyStat() calls time() + localtime_r() (not

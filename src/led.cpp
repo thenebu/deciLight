@@ -21,7 +21,11 @@ LEDController::LEDController()
     vu_initialized(false),
     last_night_color(0),
     last_night_brightness(0),
-    night_light_initialized(false)
+    night_light_initialized(false),
+    last_solid_update_ms(0),
+    last_solid_color(0),
+    last_solid_effect(0),
+    solid_initialized(false)
 {
 }
 
@@ -60,6 +64,7 @@ void LEDController::handleLevel(double dB_current, const Config& config) {
     traffic_light_initialized = false;
     vu_initialized = false;
     night_light_initialized = false;
+    solid_initialized = false;
   }
 
   if (config.display_mode == 0) {
@@ -68,7 +73,7 @@ void LEDController::handleLevel(double dB_current, const Config& config) {
   } else if (config.display_mode == 1) {
     strip->setBrightness(config.led_brightness);
     displayVUMeter(dB_current, config, now);
-  } else {
+  } else if (config.display_mode == 2) {
     // Deliberately NOT setBrightness(config.led_brightness) here:
     // displayNightLight() sets its own, dimmer babyphone_night_brightness,
     // and Adafruit_NeoPixel::setBrightness() rescales the whole pixel buffer
@@ -76,6 +81,9 @@ void LEDController::handleLevel(double dB_current, const Config& config) {
     // values in turn on every loop() iteration ground the buffer down to
     // zero within a fraction of a second.
     displayNightLight(config);
+  } else {
+    strip->setBrightness(config.led_brightness);
+    displaySolidColor(config, now);
   }
 }
 
@@ -234,5 +242,83 @@ void LEDController::displayNightLight(const Config& config) {
   for (int i = 0; i < NUM_LEDS; i++) {
     strip->setPixelColor(i, color);
   }
+  strip->show();
+}
+
+//============================================
+// LEDController::displaySolidColor() - user-picked color, static or animated
+// (display_mode == 3). solid_speed_ms is the shared effect period: one
+// blink cycle, one breathe cycle, or one lap of the chase around the strip.
+//============================================
+void LEDController::displaySolidColor(const Config& config, uint32_t now) {
+  uint16_t speed = (config.solid_speed_ms > 0) ? config.solid_speed_ms : 1500;
+
+  // "Fest" (static) is the one effect that can dedup on unchanged inputs -
+  // same pattern as displayNightLight(). The three animated effects below
+  // are time-driven and must redraw every throttle tick regardless.
+  if (config.solid_effect == 0) {
+    if (solid_initialized && last_solid_effect == 0 && config.solid_color == last_solid_color) {
+      return;
+    }
+    last_solid_color = config.solid_color;
+    last_solid_effect = 0;
+    solid_initialized = true;
+
+    for (int i = 0; i < NUM_LEDS; i++) {
+      strip->setPixelColor(i, config.solid_color);
+    }
+    strip->show();
+    return;
+  }
+
+  // Same refresh floor as displayVUMeter() - a WS2812 strip cannot usefully
+  // be redrawn faster than this, and animations have no other throttle.
+  const uint32_t SOLID_MIN_REFRESH_MS = 20;
+  if (solid_initialized && (now - last_solid_update_ms) < SOLID_MIN_REFRESH_MS) {
+    return;
+  }
+  last_solid_update_ms = now;
+  last_solid_effect = config.solid_effect;
+  last_solid_color = config.solid_color;
+  solid_initialized = true;
+
+  uint8_t base_r = (config.solid_color >> 16) & 0xFF;
+  uint8_t base_g = (config.solid_color >> 8) & 0xFF;
+  uint8_t base_b = config.solid_color & 0xFF;
+
+  if (config.solid_effect == 1) {
+    // Blinken: on for the first half of the period, off for the second.
+    bool on = (now % speed) < (speed / 2);
+    uint32_t color = on ? config.solid_color : 0;
+    for (int i = 0; i < NUM_LEDS; i++) {
+      strip->setPixelColor(i, color);
+    }
+  } else if (config.solid_effect == 2) {
+    // Faden: smooth breathing via a sine wave, one full period == speed_ms.
+    float phase = (float)(now % speed) / (float)speed;
+    float factor = (sinf(phase * 2.0f * (float)M_PI - (float)M_PI / 2.0f) + 1.0f) / 2.0f;
+    uint32_t color = strip->Color(
+      (uint8_t)(base_r * factor), (uint8_t)(base_g * factor), (uint8_t)(base_b * factor));
+    for (int i = 0; i < NUM_LEDS; i++) {
+      strip->setPixelColor(i, color);
+    }
+  } else {
+    // Lauflicht: a single lit pixel chases around the strip, one full lap
+    // per speed_ms, with a dimmed trailing tail for visual continuity.
+    uint32_t step_ms = speed / NUM_LEDS;
+    if (step_ms == 0) step_ms = 1;
+    int head = (int)((now / step_ms) % NUM_LEDS);
+
+    for (int i = 0; i < NUM_LEDS; i++) {
+      strip->setPixelColor(i, 0);
+    }
+    for (int t = 0; t < 3 && t < NUM_LEDS; t++) {
+      int idx = (head - t + NUM_LEDS) % NUM_LEDS;
+      float factor = 1.0f - (t * 0.4f);
+      strip->setPixelColor(idx, strip->Color(
+        (uint8_t)(base_r * factor), (uint8_t)(base_g * factor), (uint8_t)(base_b * factor)));
+    }
+  }
+
   strip->show();
 }

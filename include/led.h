@@ -34,6 +34,11 @@ private:
   // stay visually unchanged no matter what the alarm is doing.
   void displayNightLight(const Config& config);
 
+  // Solid color mode (display_mode == 3): one user-picked color, static or
+  // animated (blink / breathe / chase). Unlike displayNightLight() this DOES
+  // take `now`, since three of its four effects are time-driven animations.
+  void displaySolidColor(const Config& config, uint32_t now);
+
   // Member variables
   Adafruit_NeoPixel *strip;
 
@@ -68,6 +73,15 @@ private:
   uint32_t last_night_color;
   uint8_t last_night_brightness;
   bool night_light_initialized;
+
+  // Dedup + refresh-throttle state for displaySolidColor(), same shape as
+  // the VU meter's. Only the static "fest" effect can dedup on unchanged
+  // inputs (last_solid_color/last_solid_effect); the three animated effects
+  // are time-driven and always redraw once the throttle gap has passed.
+  uint32_t last_solid_update_ms;
+  uint32_t last_solid_color;
+  uint8_t last_solid_effect;
+  bool solid_initialized;
 };
 
 // Global instance

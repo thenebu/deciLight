@@ -336,7 +336,9 @@ void MqttService::publishState() {
   NoiseLevel level = led_controller.getLevelForDb(db, cfg);
 
   const char* level_str = (level == NORMAL) ? "normal" : (level == WARNING) ? "warning" : "alert";
-  const char* mode_str = (cfg.display_mode == 0) ? "traffic_light" : (cfg.display_mode == 1) ? "vu_meter" : "babyphone";
+  const char* mode_str = (cfg.display_mode == 0) ? "traffic_light" :
+    (cfg.display_mode == 1) ? "vu_meter" :
+    (cfg.display_mode == 2) ? "babyphone" : "solid_color";
 
   DynamicJsonDocument doc(192);
   doc["db"] = (int)round(db);  // whole dB is all anyone reads off the HA dashboard

@@ -14,7 +14,7 @@
 
 // Configuration structure for runtime settings
 struct Config {
-  int display_mode;           // 0=TRAFFIC_LIGHT, 1=VU_METER
+  int display_mode;           // 0=TRAFFIC_LIGHT, 1=VU_METER, 2=BABYPHONE, 3=SOLID_COLOR
   float db_floor;
   float db_normal_switchover;   // Switchover from NORMAL to WARNING
   float db_warning_switchover;  // Switchover from WARNING to ALERT
@@ -31,6 +31,14 @@ struct Config {
   uint16_t babyphone_clear_s;
   uint32_t babyphone_night_color;      // 0xRRGGBB
   uint8_t babyphone_night_brightness;  // 0-255
+
+  // Solid color mode (display_mode == 3): one user-picked color, static or
+  // animated. solid_speed_ms is the effect's full period - blink cycle,
+  // breathe cycle, or one lap of the strip for the chase - so one slider
+  // covers all three animated effects.
+  uint32_t solid_color;     // 0xRRGGBB
+  uint8_t solid_effect;     // 0=fest, 1=blinken, 2=faden, 3=lauflicht
+  uint16_t solid_speed_ms;  // effect period (ms)
 };
 
 //
@@ -79,6 +87,25 @@ public:
   // boot-time warmup average) and only ever read afterward - unlike
   // current_dB/config it doesn't change at runtime, so no lock is needed.
   void setSuggestedFloor(double dB) { suggested_floor = dB; }
+
+  // Mode button support (main.cpp owns the debounce/press-length state
+  // machine; these just apply the results thread-safely to `config`).
+  //
+  // Short press: advance display_mode to the next of the 4 modes and
+  // persist immediately - same needs_save deferred-write path handleApiSet
+  // uses, so this doesn't block main.cpp's loop() on an NVS write.
+  void cycleDisplayMode();
+
+  // Long press (held): called repeatedly (~every BUTTON_RAMP_INTERVAL_MS)
+  // while the button is down to ramp led_brightness. Does NOT set
+  // needs_save - writing to NVS on every ramp step would wear it out and
+  // stall the caller. Returns the new brightness so main.cpp can detect
+  // when it has hit 0/255 and flip its ramp direction.
+  uint8_t adjustLedBrightness(int delta);
+
+  // Called once the button is released after a long press, to persist the
+  // final ramped brightness (deferred, same as cycleDisplayMode()).
+  void persistConfig();
 
 private:
   static void webTaskWrapper(void *param);  // Static task wrapper
