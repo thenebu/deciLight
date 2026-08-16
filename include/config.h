@@ -56,6 +56,10 @@ enum NoiseLevel {
 
 //
 // NOISE THRESHOLDS
+// Grounded in WHO "Guidelines for Community Noise" (1999), Table 4.1: 50 dB LAeq is
+// the moderate-annoyance guideline value for outdoor/living areas, 65 dB LAeq is the
+// point past which normal conversation requires a raised voice and annoyance turns
+// serious. See README "Scientific Basis" section for the full source list.
 //
 #define DB_FLOOR 37.0           // Noise floor baseline (~37dB)
 #define DB_NORMAL_SWITCHOVER 50.0   // Below: NORMAL, Above: WARNING

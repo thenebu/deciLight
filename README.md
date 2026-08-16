@@ -215,6 +215,39 @@ BABYPHONE_NIGHT_BRIGHTNESS   15   // 0-255, gedimmt
 | Werkstatt | 60 | 80 | Toleriert Maschinenlärm |
 | Kinderzimmer (Babyphone) | 45 | 65 | Auslöseschwelle separat einstellen |
 
+### Wissenschaftliche Grundlage der Standardwerte
+
+Die Werkseinstellungen (Grün→Gelb bei **50 dB**, Gelb→Rot bei **65 dB**) sind keine
+Zufallszahlen, sondern orientieren sich an anerkannten Lärmwirkungs-Richtwerten:
+
+- **50 dB (Grün→Gelb):** Die WHO nennt in den *Guidelines for Community Noise* (1999,
+  Tabelle 4.1) 50 dB LAeq als Richtwert, ab dem in Wohn-/Aufenthaltsräumen mit
+  **moderater Belästigung** zu rechnen ist ("outdoor living area", moderate annoyance).
+  Oberhalb dieses Pegels beginnt Lärm subjektiv als störend wahrgenommen zu werden.
+- **65 dB (Gelb→Rot):** Normale Unterhaltungssprache liegt laut NIDCD/CDC-Referenztabellen
+  bei etwa 60–70 dB(A) (1 m Abstand). Die WHO-Richtlinie weist darauf hin, dass oberhalb
+  eines Hintergrundpegels von rund 65 dB die Sprachverständlichkeit deutlich leidet und
+  die Stimme angehoben werden muss, während gleichzeitig laut Tabelle 4.1 die Schwelle zur
+  **ernsten Belästigung** ("serious annoyance") erreicht wird.
+- Zum Einordnen: **Gehörschäden** durch Dauerlärm sind erst bei deutlich höheren Pegeln
+  relevant — NIOSH empfiehlt max. 85 dB(A) über 8 Std. (REL), OSHA erlaubt gesetzlich
+  max. 90 dB(A) über 8 Std. (PEL). ROT markiert hier also eine **Komfort-/Konzentrations-
+  Warnschwelle**, nicht bereits eine Gehörschäden-Warnung — dafür liegen die Pegel weit
+  genug auseinander, dass ROT als früher, harmloser Hinweis taugt.
+- Für spezielle Umgebungen (Klassenzimmer, Kinderzimmer) empfiehlt die WHO strengere
+  Innenraum-Richtwerte (z. B. 35 dB LAeq in Klassenzimmern zur Sprachverständlichkeit,
+  30 dB LAeq nachts im Schlafzimmer) — diese liegen jedoch so nah am technischen
+  Grundrauschen des Mikrofons (`DB_FLOOR` ≈ 37 dB), dass eine LED-Ampel bei diesen engen
+  Werten kaum noch sinnvoll zwischen "Grün" und "Gelb" unterscheiden könnte. Die
+  Empfehlungen in der Tabelle oben sind deshalb praxisnah nach oben verschobene
+  Näherungswerte, keine 1:1-Übernahme der WHO-Innenraumwerte.
+
+**Quellen:**
+- WHO (1999): [*Guidelines for Community Noise*](https://www.who.int/publications/i/item/a68672), Tabelle 4.1 (Richtwerte für spezifische Umgebungen)
+- WHO Regional Office for Europe (2018): [*Environmental Noise Guidelines for the European Region*](https://cdn.who.int/media/docs/default-source/who-compendium-on-health-and-environment/who_compendium_noise_01042022.pdf)
+- NIOSH: [*Criteria for a Recommended Standard – Occupational Noise Exposure*](https://www.nonoise.org/hearing/criteria/criteria.htm) (REL 85 dB(A)/8h)
+- OSHA: [*Occupational Noise Exposure*](https://www.osha.gov/noise) (PEL 90 dB(A)/8h)
+
 <a id="de-wifi-web-konfiguration"></a>
 ## 🌐 WiFi- und Web-Konfiguration
 
@@ -785,6 +818,37 @@ BABYPHONE_NIGHT_BRIGHTNESS   15   // 0-255, dimmed
 | Active classroom | 45 | 70 | Group work sessions |
 | Workshop | 60 | 80 | Tolerate machinery |
 | Nursery (babyphone) | 45 | 65 | Set the trigger threshold separately |
+
+### Scientific Basis for the Defaults
+
+The factory defaults (Green→Yellow at **50 dB**, Yellow→Red at **65 dB**) aren't arbitrary —
+they're anchored to established noise-effect guideline values:
+
+- **50 dB (Green→Yellow):** The WHO's *Guidelines for Community Noise* (1999, Table 4.1)
+  lists 50 dB LAeq as the guideline value at which **moderate annoyance** begins in
+  outdoor/living areas. Above this level, noise starts being subjectively perceived as
+  disruptive.
+- **65 dB (Yellow→Red):** Normal conversational speech runs roughly 60–70 dB(A) at 1 m per
+  NIDCD/CDC reference charts. The WHO guidelines note that speech intelligibility degrades
+  markedly and speakers must raise their voice once background noise exceeds about 65 dB,
+  and Table 4.1 also places the onset of **serious annoyance** around this level.
+- For context: **hearing damage** from sustained noise only becomes relevant at
+  meaningfully higher levels — NIOSH recommends a max. of 85 dB(A) over 8h (REL), OSHA's
+  legal limit is 90 dB(A) over 8h (PEL). RED here is a **comfort/concentration warning
+  threshold**, not a hearing-damage warning — the gap between 65 dB and the occupational
+  limits is deliberately wide enough that RED still functions as an early, low-stakes cue.
+- For specialized settings (classrooms, nurseries), the WHO recommends stricter indoor
+  guideline values (e.g. 35 dB LAeq in classrooms for speech intelligibility, 30 dB LAeq
+  at night in bedrooms) — but those sit close enough to the microphone's own noise floor
+  (`DB_FLOOR` ≈ 37 dB) that an LED indicator could barely distinguish "green" from "yellow"
+  at those levels. The recommendations in the table above are therefore practical
+  approximations nudged upward, not a direct copy of WHO's indoor values.
+
+**Sources:**
+- WHO (1999): [*Guidelines for Community Noise*](https://www.who.int/publications/i/item/a68672), Table 4.1 (guideline values for specific environments)
+- WHO Regional Office for Europe (2018): [*Environmental Noise Guidelines for the European Region*](https://cdn.who.int/media/docs/default-source/who-compendium-on-health-and-environment/who_compendium_noise_01042022.pdf)
+- NIOSH: [*Criteria for a Recommended Standard – Occupational Noise Exposure*](https://www.nonoise.org/hearing/criteria/criteria.htm) (REL 85 dB(A)/8h)
+- OSHA: [*Occupational Noise Exposure*](https://www.osha.gov/noise) (PEL 90 dB(A)/8h)
 
 <a id="en-wifi-web-configuration"></a>
 ## 🌐 WiFi & Web Configuration
