@@ -11,6 +11,30 @@ Ein Echtzeit-Lärmmonitor, der den Geräuschpegel als Ampel mit RGB-LEDs anzeigt
 > browserbasierten OTA-Updates (inkl. Neustart in die neu geflashte Firmware, mehrfach
 > über einen Stromzyklus hinweg bestätigt).
 
+<details>
+<summary><strong>Inhaltsverzeichnis</strong></summary>
+
+- [📋 Funktionen](#de-funktionen)
+- [🛒 Verwendete Hardware](#de-verwendete-hardware)
+- [💻 Kompatible Hardware](#de-kompatible-hardware)
+- [🔧 Hardware-Einrichtung](#de-hardware-einrichtung)
+- [📊 Funktionsweise](#de-funktionsweise)
+- [🎚️ Konfiguration](#de-konfiguration)
+- [🌐 WiFi- und Web-Konfiguration](#de-wifi-web-konfiguration)
+- [🏠 MQTT- / Home-Assistant-Integration](#de-mqtt-ha)
+- [🔑 Passwörter](#de-passwoerter)
+- [📡 OTA-Updates (Over-the-Air)](#de-ota)
+- [🚀 Bauen und Hochladen](#de-bauen-hochladen)
+- [🏷️ Versionierung und Releases](#de-versionierung-releases)
+- [📈 Serielle Ausgabe](#de-serielle-ausgabe)
+- [🔧 Kalibrierung](#de-kalibrierung)
+- [🔴 Fehlerbehebung](#de-fehlerbehebung)
+- [📚 Referenzen](#de-referenzen)
+- [📝 Lizenz](#de-lizenz)
+
+</details>
+
+<a id="de-funktionen"></a>
 ## 📋 Funktionen
 
 - **Echtzeit-Geräuscherkennung** über ein I2S-MEMS-Mikrofon
@@ -36,6 +60,7 @@ Ein Echtzeit-Lärmmonitor, der den Geräuschpegel als Ampel mit RGB-LEDs anzeigt
 - **Zwei getrennte Passwörter** – eins fürs Firmware-Flashen, eins fürs Live-Hören, damit
   das Weitergeben des einen nicht das andere mit verschenkt
 
+<a id="de-verwendete-hardware"></a>
 ## 🛒 Verwendete Hardware
 
 Diese Teile habe ich selbst gekauft (Amazon.de, Stand: wie unten verlinkt):
@@ -55,6 +80,7 @@ und Verfügbarkeit entsprechen dem Stand, als die Links hinzugefügt wurden, und
 sich ändern. Die Links sind normale Amazon-Links (kein Affiliate-Tracking durch dieses
 Projekt) — einfach das, was ich selbst gekauft habe.
 
+<a id="de-kompatible-hardware"></a>
 ## 💻 Kompatible Hardware
 
 Dieses Projekt ist auf **ESP32** zugeschnitten — nicht auf ESP8266 oder andere
@@ -80,6 +106,7 @@ ein Ersatz-/Alternativboard:
 **Nicht kompatibel:** ESP8266 (kein I2S/RMT, kein FreeRTOS-Multicore, andere
 Partitionierung) sowie generische AVR-/STM32-Boards ohne ESP-IDF-Unterstützung.
 
+<a id="de-hardware-einrichtung"></a>
 ## 🔧 Hardware-Einrichtung
 
 ### Pin-Konfiguration
@@ -108,6 +135,7 @@ Ein optionaler Taster an GPIO 6 (gegen GND) erlaubt Bedienung ohne WebUI:
 Ist kein Taster angeschlossen, bleibt GPIO 6 dank internem Pull-up dauerhaft HIGH und
 es passiert nichts - die Funktion ist also optional und stört ohne Hardware nicht.
 
+<a id="de-funktionsweise"></a>
 ## 📊 Funktionsweise
 
 ### Audio-Verarbeitungspipeline
@@ -141,6 +169,7 @@ es passiert nichts - die Funktion ist also optional und stört ohne Hardware nic
    sonst                               → ROT    (zu laut)
    ```
 
+<a id="de-konfiguration"></a>
 ## 🎚️ Konfiguration
 
 ### Standardwerte
@@ -171,6 +200,7 @@ BABYPHONE_NIGHT_BRIGHTNESS   15   // 0-255, gedimmt
 | Werkstatt | 60 | 80 | Toleriert Maschinenlärm |
 | Kinderzimmer (Babyphone) | 45 | 65 | Auslöseschwelle separat einstellen |
 
+<a id="de-wifi-web-konfiguration"></a>
 ## 🌐 WiFi- und Web-Konfiguration
 
 ### WiFi-Modi
@@ -333,6 +363,7 @@ ein zweites Gerät zu klonen.
 > ⚠️ Die exportierte Datei enthält deine WiFi- und MQTT-Passwörter im Klartext —
 > behandle sie wie jede andere Zugangsdatendatei.
 
+<a id="de-mqtt-ha"></a>
 ## 🏠 MQTT- / Home-Assistant-Integration
 
 Sobald das Gerät mit dem Heimnetzwerk verbunden ist, kann es seine Lärmmesswerte an
@@ -369,6 +400,7 @@ anmelden — keine manuelle Entitätskonfiguration nötig.
 Die Geräte-ID wird aus den letzten 6 Hex-Ziffern der MAC-Adresse abgeleitet (z. B.
 `noiselight-a1b2c3`).
 
+<a id="de-passwoerter"></a>
 ## 🔑 Passwörter
 
 Die Firmware kennt **zwei getrennte Zugangsdaten** (beide in `include/config.h`):
@@ -398,6 +430,7 @@ OTA-Passwort gibt es diese Option bewusst nicht.
 > *Benutzernamen* stehen dort ein zweites Mal. Änderst du einen davon, musst du ihn an
 > beiden Stellen ändern.
 
+<a id="de-ota"></a>
 ## 📡 OTA-Updates (Over-the-Air)
 
 Sobald das Gerät mit deinem Heimnetzwerk verbunden ist (STA-Modus), kann die Firmware
@@ -438,6 +471,7 @@ Benutzername/Passwort. Fertige Binärdateien für diesen Weg liegen im Verzeichn
 [`firmware/`](firmware/) — eine `.bin` pro `FIRMWARE_VERSION`, automatisch von jedem
 `pio run` gebaut.
 
+<a id="de-bauen-hochladen"></a>
 ## 🚀 Bauen und Hochladen
 
 ### Voraussetzungen
@@ -466,6 +500,7 @@ platformio run -t upload -e esp32-s3-devkitc1-n4r2-ota
 # Or in VS Code: Ctrl+Shift+B → Upload
 ```
 
+<a id="de-versionierung-releases"></a>
 ## 🏷️ Versionierung und Releases
 
 `FIRMWARE_VERSION` in `include/config.h` ist die einzige Quelle der Wahrheit. Der Wert
@@ -503,6 +538,7 @@ auszuchecken oder eine Entwicklungsumgebung zu installieren.
 > `--repo` ist hier nicht optional: dieses Arbeitsverzeichnis hat mehrere Remotes, und
 > `gh` würde sonst das Upstream-Repository ansprechen statt des eigenen Forks.
 
+<a id="de-serielle-ausgabe"></a>
 ## 📈 Serielle Ausgabe
 
 Das Gerät gibt dB-Messwerte über den seriellen Monitor aus (115200 Baud):
@@ -513,6 +549,7 @@ Leq: 62.1 dB | Min: 40 | Max: 60 | RED
 Leq: 55.2 dB | Min: 40 | Max: 60 | YELLOW
 ```
 
+<a id="de-kalibrierung"></a>
 ## 🔧 Kalibrierung
 
 ### Mikrofonempfindlichkeit
@@ -533,6 +570,7 @@ Wenn die Messwerte durchgehend abweichen:
 - **Halte Abstand** zu Vibrationsquellen
 - Sorge für einen **freien Luftweg** (nicht abgedeckt)
 
+<a id="de-fehlerbehebung"></a>
 ## 🔴 Fehlerbehebung
 
 | Problem | Ursache | Lösung |
@@ -546,6 +584,7 @@ Wenn die Messwerte durchgehend abweichen:
 | MQTT-Entitäten erscheinen nicht in Home Assistant | Broker nicht erreichbar oder Discovery noch nicht gesendet | Host/Port/Zugangsdaten in den Netzwerkeinstellungen prüfen; Discovery wird bei jeder Neuverbindung erneut gesendet |
 | OTA-Upload schlägt fehl/läuft in Timeout | Gerät im AP-Fallback oder falsches `--auth`-Passwort | Sicherstellen, dass das Gerät im Heimnetzwerk ist (`noiselight.local` löst auf) und `OTA_PASSWORD` mit `platformio.ini` übereinstimmt |
 
+<a id="de-referenzen"></a>
 ## 📚 Referenzen
 
 - **Original deciLight Project**: https://github.com/bbbenji/deciLight
@@ -555,6 +594,7 @@ Wenn die Messwerte durchgehend abweichen:
 - **PubSubClient (MQTT)**: https://github.com/knolleary/pubsubclient
 - **Home Assistant MQTT Discovery**: https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery
 
+<a id="de-lizenz"></a>
 ## 📝 Lizenz
 
 Dieses Projekt basiert auf [deciLight](https://github.com/bbbenji/deciLight) (GPL-3.0).
@@ -573,6 +613,30 @@ A real-time noise monitor that displays sound levels as a traffic light using RG
 > (including rebooting into the newly flashed firmware, confirmed across a real power
 > cycle, more than once).
 
+<details>
+<summary><strong>Table of Contents</strong></summary>
+
+- [📋 Features](#en-features)
+- [🛒 Hardware Used](#en-hardware-used)
+- [💻 Compatible Hardware](#en-compatible-hardware)
+- [🔧 Hardware Setup](#en-hardware-setup)
+- [📊 How It Works](#en-how-it-works)
+- [🎚️ Configuration](#en-configuration)
+- [🌐 WiFi & Web Configuration](#en-wifi-web-configuration)
+- [🏠 MQTT / Home Assistant Integration](#en-mqtt-ha)
+- [🔑 Passwords](#en-passwords)
+- [📡 OTA (Over-the-Air) Updates](#en-ota)
+- [🚀 Building & Uploading](#en-building-uploading)
+- [🏷️ Versioning & Releases](#en-versioning-releases)
+- [📈 Serial Output](#en-serial-output)
+- [🔧 Calibration](#en-calibration)
+- [🔴 Troubleshooting](#en-troubleshooting)
+- [📚 References](#en-references)
+- [📝 License](#en-license)
+
+</details>
+
+<a id="en-features"></a>
 ## 📋 Features
 
 - **Real-time noise detection** via I2S MEMS microphone
@@ -598,6 +662,7 @@ A real-time noise monitor that displays sound levels as a traffic light using RG
 - **Two separate passwords** – one for flashing firmware, one for live listening, so
   handing out the one does not give away the other
 
+<a id="en-hardware-used"></a>
 ## 🛒 Hardware Used
 
 This is the exact parts list I actually bought (Amazon.de, as of when the links below
@@ -617,6 +682,7 @@ more devices for not much more than the cost of one. Prices and availability are
 when these links were added and may change. These are plain Amazon links (not
 affiliate-tracked by this project) — just what I bought.
 
+<a id="en-compatible-hardware"></a>
 ## 💻 Compatible Hardware
 
 This project is built for **ESP32** — not ESP8266 or other microcontrollers. It uses
@@ -641,6 +707,7 @@ replacement/alternative board:
 **Not compatible:** ESP8266 (no I2S/RMT, no FreeRTOS multicore, different
 partitioning) or generic AVR/STM32 boards without ESP-IDF support.
 
+<a id="en-hardware-setup"></a>
 ## 🔧 Hardware Setup
 
 ### Pin Configuration
@@ -668,6 +735,7 @@ An optional button on GPIO 6 (to GND) allows control without the WebUI:
 Without a button wired up, GPIO 6 stays HIGH via the internal pull-up and nothing
 happens - the feature is optional and inert without the hardware.
 
+<a id="en-how-it-works"></a>
 ## 📊 How It Works
 
 ### Audio Processing Pipeline
@@ -700,6 +768,7 @@ happens - the feature is optional and inert without the hardware.
    else                                → RED     (too loud)
    ```
 
+<a id="en-configuration"></a>
 ## 🎚️ Configuration
 
 ### Defaults
@@ -730,6 +799,7 @@ BABYPHONE_NIGHT_BRIGHTNESS   15   // 0-255, dimmed
 | Workshop | 60 | 80 | Tolerate machinery |
 | Nursery (babyphone) | 45 | 65 | Set the trigger threshold separately |
 
+<a id="en-wifi-web-configuration"></a>
 ## 🌐 WiFi & Web Configuration
 
 ### WiFi Modes
@@ -877,6 +947,7 @@ working setup or cloning it to a second unit.
 > ⚠️ The exported file contains your WiFi and MQTT passwords in plain text — store it
 > like any other credential file.
 
+<a id="en-mqtt-ha"></a>
 ## 🏠 MQTT / Home Assistant Integration
 
 Once connected to your home network, the device can publish its noise readings to an
@@ -912,6 +983,7 @@ entity configuration needed.
 The device ID is derived from the last 6 hex digits of its MAC address (e.g.
 `noiselight-a1b2c3`).
 
+<a id="en-passwords"></a>
 ## 🔑 Passwords
 
 The firmware uses **two separate credentials** (both in `include/config.h`):
@@ -940,6 +1012,7 @@ OTA password deliberately has no such option.
 > is a string literal inside `src/web.cpp` — it cannot see the `#define`s. The
 > *usernames* are repeated there. If you change either, change it in both places.
 
+<a id="en-ota"></a>
 ## 📡 OTA (Over-the-Air) Updates
 
 Once the device is connected to your home network (STA mode), firmware can be updated
@@ -977,6 +1050,7 @@ the browser itself pops up a native login prompt asking for username/password in
 Ready-to-flash binaries for this path live in the [`firmware/`](firmware/) directory —
 one `.bin` per `FIRMWARE_VERSION`, built automatically by every `pio run`.
 
+<a id="en-building-uploading"></a>
 ## 🚀 Building & Uploading
 
 ### Prerequisites
@@ -1005,6 +1079,7 @@ platformio run -t upload -e esp32-s3-devkitc1-n4r2-ota
 # Or in VS Code: Ctrl+Shift+B → Upload
 ```
 
+<a id="en-versioning-releases"></a>
 ## 🏷️ Versioning & Releases
 
 `FIRMWARE_VERSION` in `include/config.h` is the single source of truth. It is shown in
@@ -1042,6 +1117,7 @@ installing a toolchain.
 > `--repo` is not optional here: this working copy has several remotes, and `gh` would
 > otherwise target the upstream repository instead of your own fork.
 
+<a id="en-serial-output"></a>
 ## 📈 Serial Output
 
 The device outputs dB measurements to the serial monitor (115200 baud):
@@ -1052,6 +1128,7 @@ Leq: 62.1 dB | Min: 40 | Max: 60 | RED
 Leq: 55.2 dB | Min: 40 | Max: 60 | YELLOW
 ```
 
+<a id="en-calibration"></a>
 ## 🔧 Calibration
 
 ### Microphone Sensitivity
@@ -1072,6 +1149,7 @@ If readings are consistently off:
 - **Keep away** from vibration sources
 - Ensure **clear air path** (not covered)
 
+<a id="en-troubleshooting"></a>
 ## 🔴 Troubleshooting
 
 | Issue | Cause | Solution |
@@ -1085,6 +1163,7 @@ If readings are consistently off:
 | MQTT entities not appearing in Home Assistant | Broker unreachable or discovery not yet sent | Verify host/port/credentials in Network settings; discovery re-sends on every reconnect |
 | OTA upload fails/times out | Device on AP fallback, or wrong `--auth` password | Confirm device is on your home network (`noiselight.local` resolves) and `OTA_PASSWORD` matches `platformio.ini` |
 
+<a id="en-references"></a>
 ## 📚 References
 
 - **Original deciLight Project**: https://github.com/bbbenji/deciLight
@@ -1094,6 +1173,7 @@ If readings are consistently off:
 - **PubSubClient (MQTT)**: https://github.com/knolleary/pubsubclient
 - **Home Assistant MQTT Discovery**: https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery
 
+<a id="en-license"></a>
 ## 📝 License
 
 This project is adapted from [deciLight](https://github.com/bbbenji/deciLight) (GPL-3.0).
