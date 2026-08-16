@@ -262,11 +262,11 @@ gegenüber dem `.env`-Standard.
 
 ### Web-Interface-Funktionen
 
-![noiselight Web Interface – Live-Pegel, Verlauf und Tagesstatistik](./doc/webUI-live.png)
-*Live-Pegelanzeige, Verlaufsdiagramm und Tagesstatistik*
+![noiselight Web Interface – Live-Pegel, Betriebsart und Lichteinstellungen](./doc/webUI-live.jpg)
+*Live-dB-Anzeige, Verlaufsgraph und Betriebsart-Auswahl (Ampel / VU-Meter / Babyphone / Einzelfarbe)*
 
-![noiselight Web Interface – Konfiguration](./doc/webUI.jpeg)
-*Anzeigemodus, LED-Einstellungen und Umschaltpunkte*
+![noiselight Web Interface – Helligkeit & Farben](./doc/webUI.jpeg)
+*Ausgeklappte Lichteinstellungen: Helligkeit sowie Farben für Ruhig/Laut/Zu laut*
 
 **Anzeigemodus**
 - **Ampel:** Alle LEDs zeigen eine einzelne Farbe (GRÜN/GELB/ROT)
@@ -813,11 +813,11 @@ NVS-stored value always wins over the `.env` default.
 
 ### Web Interface Features
 
-![noiselight Web Interface – live level, history graph and Tagesstatistik](./doc/webUI-live.png)
-*Live level display, history graph, and Tagesstatistik*
+![noiselight Web Interface – live level, operating mode and light settings](./doc/webUI-live.jpg)
+*Live dB reading, history graph, and operating mode picker (traffic light / VU meter / babyphone / single color)*
 
-![noiselight Web Interface – configuration](./doc/webUI.jpeg)
-*Display mode, LED settings, and switchover points*
+![noiselight Web Interface – brightness & colours](./doc/webUI.jpeg)
+*Expanded light settings: brightness and quiet/loud/too-loud colours*
 
 **Display Mode**
 - **Traffic Light:** All LEDs show single color (GREEN/YELLOW/RED)
